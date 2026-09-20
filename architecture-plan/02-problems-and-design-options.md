@@ -32,7 +32,7 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Alternatives:** generate only a recommendation and then a selected plan (two calls); generate a style-neutral plan then adapt live; choose preference before assessment and generate one plan.
 
-**Direction:** choose a style from plain descriptions before initial review, with a neutral supportive default. Review produces one plan. Later preference changes are explicit user inputs consumed at the next review; the current applied plan/style remains visible until then. No automatic style switching and no unsupported claim that one packaged method is clinically best.
+**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Preference edits before the first accepted message update intake's snapshot; later edits apply to future sessions and their reviews. Review produces one plan for its session's method. No separate SETUP gate, automatic style switching, or unsupported claim that one packaged method is clinically best.
 
 ### P3. The second retrospective call has a costly authority boundary
 
@@ -118,6 +118,8 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Direction:** the last option. A trace is useful evidence, but normal production code need not implement a forensic protocol for hypothetical future auditors.
 
+Phase 10 addressed real correctness problems under its then-current extraction contract: attempt correlation, committed versus observed state, evidence completeness, and provenance. Its evidence remains valid for those historical claims. The lesson from the large forensic surface is to reconsider the product contract that required it, not to dismiss that work or reinterpret its results as admission for the new architecture.
+
 ## Candidate architectures compared
 
 | Candidate | Simplicity and maintenance | Continuity / provenance | Robustness, diagnosis, and latency | Judgment |
@@ -148,11 +150,11 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** two serial passes, one compact structured call, an unstructured note followed by extraction.
 
-**Choice and why:** one call. The completed transcript, current plan, and previous handoff supply both analysis and next-step reasoning. Validate each section separately in ordinary code and commit together. There is no evidence here that another generated intermediary is an independent clinical check.
+**Choice and why:** provisionally one call, frozen only after R0 admission. The completed transcript, current plan, and previous handoff supply both analysis and next-step reasoning. Test the smallest consumer-justified draft on 6–10 frozen completed sessions before designing production persistence around it. Validate each section separately in ordinary code and commit together. There is no evidence here that another generated intermediary is an independent clinical check.
 
 **Trade-offs:** larger single output; one invalid section invalidates the whole result; the model may mix interpretation with recommendation. Tight schemas, source labels, and targeted trials are required. Combining calls is not guaranteed to halve elapsed time.
 
-**Revisit when:** fixed synthetic cases show persistent omissions or plan drift with the compact schema after one correction, and a measured two-pass design materially improves those exact failures. Reintroduce a specific two-step processor only then; no generic workflow framework.
+**Revisit when:** any R0 case fails its hard contract or human review identifies material omissions/plan drift within the one-correction budget. Refine the compact schema/prompt first; if a measured two-pass design addresses persistent failures, revise this decision before the cutover. Freeze matched inputs and record failures rather than averaging them away. No production restructuring proceeds on pending admission, and no generic workflow framework follows from a second call.
 
 ### D3. One model is the baseline; a second is optional
 
@@ -180,6 +182,8 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Choice and why:** after unifying initial and later review, each completed session has exactly one review lifecycle. A session row with status, attempt, and bounded error metadata is enough. Keep one owned asyncio task and cancellation-safe writes.
 
+**Guardrail:** conditional attempt fencing protects atomic commits; it does not justify worker identities, leases, attempt-history tables, or an embedded job framework. Generation provenance stays on the accepted artifact, not in a second work ledger.
+
 **Trade-offs:** adding a second independent durable job per session would require revisiting this model. Moving columns alone is not the benefit; removing operation kinds, result ownership, and extra workflow stages is.
 
 **Revisit when:** the product introduces independently retryable work with a separate result and lifecycle. At that point, a small work table could earn its existence again.
@@ -188,17 +192,19 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** raw replay, model-authored facts, source-reference selection, SQLite full-text search, embeddings/vector storage.
 
-**Choice and why:** retain source references selected during reviews, keep a few active references in the handoff, and use deterministic recency/lexical selection plus explicit user recall. The target does not store extracted biographical facts or a continuously rewritten history summary.
+**Choice and why:** start with active handoff anchors, explicit user recall, then a bounded recent memory-reference pool with deterministic purpose/recency ordering. At roughly five selections per review, 100 sessions supply only about 500 candidate references. Test this baseline before adding term extraction, text matching, or ranking infrastructure. The target does not store extracted biographical facts or a continuously rewritten history summary.
 
-**Trade-offs:** lexical retrieval misses paraphrases and cross-language matches. A bounded handoff can forget an old concern. These are measurable limitations, not solved by calling summaries factual memory.
+**Trade-offs:** recency cannot automatically find every old relevant event, and a bounded handoff can forget an old concern. Explicit source recall is the immediate remedy. Measure unanchored recall misses separately from mandatory-source correctness; do not imply that preserving a source guarantees its prompt inclusion.
 
-**Revisit when:** a fixed historical-recall set shows relevant source turns repeatedly missed despite appropriate pins and ordinary text search. First consider SQLite FTS5; it provides local full-text indexing and ranking without a new service, but requires maintaining index consistency. Embeddings come only after a demonstrated semantic-retrieval gap. [SQLite FTS5 documentation](https://www.sqlite.org/fts5.html)
+**Revisit when:** R6's fixed 100-session recall set demonstrates a material gap despite anchors and explicit recall. A separate R6b may add bounded parameterized lexical matching and compare the same cases. Consider SQLite FTS5 only if that approach remains inadequate; embeddings need a further demonstrated semantic gap. Neither is a default migration deliverable. [SQLite FTS5 documentation](https://www.sqlite.org/fts5.html)
 
 ### D7. Standard logs for operation; small direct evidence for tests
 
 **Options:** enrich the current recorder; a distributed tracing platform; standard logging; no durable logs.
 
 **Choice and why:** ordinary Python logging already supports contextual records, filters, and local rotation. Use those mechanisms for normal debugging. Keep evidence recording in the test performing a hard assertion when it needs an exact request/result or before/after state. [Python logging cookbook](https://docs.python.org/3/howto/logging-cookbook.html)
+
+**Rule:** no operational log consumer may become a correctness dependency. A relationship needed to establish product semantics belongs in SQLite or in the owning test's direct evidence, not a join across log events.
 
 **Trade-offs:** ordinary logs can rotate, fail to write, and cannot independently prove every historical transition. Full replay requires opt-in capture. This is acceptable for operation, not for a hard test that explicitly promises exact evidence.
 
@@ -208,21 +214,37 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** existing schema transformation/parser; the SDK public `chat.completions.parse`; a new structured-output wrapper; permissive JSON repair.
 
-**Choice and why:** for the admitted `json_schema` path, use public SDK parsing with a Pydantic response model. Keep Jung's semantic validator and one explicit correction loop around it. The installed SDK implementation, matching OpenAI SDK **2.45.0** in `uv.lock`, exposes this path and performs one HTTP post; SDK transport retries remain disabled. This can remove Jung's strict-schema conversion and second validation walk. For deliberately configured JSON-object/prompt mode, send the schema in the prompt and use Pydantic directly.
+**Choice and why:** first admit the actual intended llama.cpp and MTPLX builds/configurations against the compact review schema in R0. If both pass, target `json_schema` as the sole production review mode. Keep another mode only for a named required endpoint whose measured incompatibility justifies it; do not preserve three paths for hypothetical portability. This intentionally narrows the current configurable endpoint promise when the canonical docs change at cutover.
+
+In R5, test public SDK parsing with a Pydantic response model against the then-locked SDK. The original inspection found this path in SDK **2.45.0**, with one HTTP post; do not assume that inspection admits a later version. Keep Jung's semantic validator, one explicit correction loop, and disabled SDK retries. The deletion target is Jung's strict-schema conversion and second validation walk, plus unneeded structured modes.
 
 **Trade-offs:** SDK parse errors, refusal, length endings, and raw-response capture must be covered against the locked SDK and intended server. Correction can regenerate from original input plus safe error locations; it does not require echoing an invalid sensitive response. Use public raw-response facilities for opted-in capture, never private SDK schema helpers. Model schema constraints still need compatibility tests.
 
-**Revisit when:** the locked public SDK cannot support the admitted endpoint or expose required failure evidence. Keep a narrowly justified direct-create branch in that case, not a new framework or hidden repair service. This is an implementation admission gate in M3, not permission to abandon semantic validation.
+**Revisit when:** the locked public SDK cannot support the admitted endpoint or expose required failure evidence. Retain a narrowly justified direct-create implementation of the admitted schema path in that case, not an extra mode, framework, or hidden repair service. R0 admits server/schema behavior; R5 separately admits the parsing implementation. Neither gate delegates semantic validation.
 
 ### D9. Whole-session review, bounded session size
 
 **Options:** silently omit old turns; chunk-and-merge reviews; durable running summaries; a session size that fits the review model.
 
-**Choice and why:** admit sessions that can be fully reviewed. Reserve review space before accepting another turn. Approaching the limit becomes a visible session boundary, and history stays permanently accessible.
+**Choice and why:** define one conservative maximum serialized session-source size, bound assistant output and all non-session review sections, and admit only review endpoints that fit the complete envelope. Before accepting a turn, add the candidate patient source and maximum assistant source to the current source-byte count. No per-session capacity JSON, frozen runtime, or reconstructed prospective review request is needed. Warn at 80%; reject overflow while preserving the draft and offering explicit closure. History stays permanently accessible.
+
+The product envelope is independent of the configured retry model. A replacement endpoint must fit the same envelope before it can review accepted sessions. R0 fixes the concrete limits using representative multilingual/long-message fixtures; runtime capacity errors remain explicit failures rather than proof that byte counting is exact tokenization.
 
 **Trade-offs:** very long sessions or unusually small review contexts require an earlier break. Automatic chunk-and-merge has no demonstrated need yet, but may be better than disruptive boundaries if realistic use frequently reaches them.
 
 **Revisit when:** recorded session lengths and user feedback show the limit interferes with ordinary use. Evaluate ephemeral chunk analysis then, with explicit coverage and cross-chunk context; do not silently relabel a partial review complete.
+
+### D10. Keep configuration small after task reduction
+
+**Choice and why:** retain `pydantic-settings`, `.env`, and one `load_settings()` owner. Resolve two small types, `EndpointProfile` and `CallPolicy`, once conversation/review replace six tasks. Use the existing environment-over-dotenv-over-default precedence; no TOML artifact, secret-name indirection, or second parser. Fix cross-origin credential inheritance in R1 without coupling that correctness fix to a settings redesign.
+
+**Revisit when:** the resulting two-task configuration demonstrates a concrete usability problem that a file would solve. Remove responsibilities before choosing new configuration machinery.
+
+### D11. Preferences are metadata, not a SETUP stage
+
+**Choice and why:** initialize the profile and intake together with visible English/supportive defaults. Display name is optional. Preferences can be edited before first input, then are frozen for that session; later changes apply to future sessions. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
+
+**Trade-off:** the default language/method is a product default, not an explicit patient choice or clinical recommendation. The console must make defaults and pending changes visible. Reinstate a setup gate only for a demonstrated requirement that cannot be met through editable metadata.
 
 ## Dependencies and abstraction ledger
 
@@ -232,11 +254,11 @@ No new runtime dependency is required by the target.
 |---|---|---|
 | OpenAI Python SDK | HTTP request/response types, streaming, connection pool, public schema serialization/parsing | Keep; delete bespoke schema processing where public parse is admitted; lock and test behavior |
 | Pydantic | Typed input/output/document validation | Keep; deletes hand validation of document structure; never delegates semantic truth |
-| pydantic-settings | One validated configuration load | Keep; use it for simpler explicit profiles rather than spreading environment reads |
+| pydantic-settings | One validated environment/dotenv configuration load | Keep; simplify to endpoint profiles and call policies after task reduction |
 | FastAPI + Uvicorn | HTTP lifecycle/routing/streaming | Keep; no extra service tier |
 | HTTPX | Console HTTP and test transports | Keep; avoids custom networking/protocol parsing below NDJSON |
 | prompt_toolkit | Async console input | Keep; already removes bespoke input machinery |
-| sqlite3 + stdlib logging/asyncio/tomllib | Transactions, logging, owned work, optional readable config file | Already available; no ORM, logging daemon, or config package needed |
+| sqlite3 + stdlib logging/asyncio | Transactions, logging, owned work | Already available; no ORM, logging daemon, or new configuration format needed |
 | aiosqlite | Async connection worker | Defer: does not eliminate cancellation/transaction ownership; current whole-operation thread bridge is small and sound |
 | SQLAlchemy / repository layer | Query mapping | Reject now: little valuable SQL disappears; explicit transactions remain necessary |
 | Instructor / agent frameworks / generic routers | Wrapping generation/orchestration | Reject now: semantic validation, explicit corrections, and local runtime policy remain Jung-owned; wrapper adds another behavior surface |
