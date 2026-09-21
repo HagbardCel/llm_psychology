@@ -72,14 +72,14 @@ The backend also takes an OS advisory lock for the configured data directory at 
 |---|---|
 | INTAKE | Chat; finish intake after at least one nonblank patient message; edit preferences while idle |
 | REVIEW | Read state/history; retry a failed or unscheduled review when idle; stop the application |
-| READY | Start therapy; edit preferences |
-| THERAPY | Chat; end session; edit preferences only between turns |
+| READY | Start therapy; edit language/display name; method remains fixed |
+| THERAPY | Chat; end session; edit language/display name only between turns; method remains fixed |
 
-Create each session with a small `preferences_json` snapshot. During intake, idle language/style edits update profile and session preferences atomically and affect subsequent replies without rewriting past messages. Finish Intake freezes the final snapshot in the transaction that closes intake and queues review. An edit racing with closure is serialized by normal command ownership; once closed, review and retry use the frozen preferences. During therapy, preferences freeze at session creation; later profile edits are visibly pending for future sessions. No separate setup/submitted flag is needed.
+Create each session with a small `preferences_json` snapshot. During intake, idle language/style edits update profile and session preferences atomically and affect subsequent replies without rewriting past messages. Finish Intake freezes the therapeutic method and final intake snapshot in the transaction that closes intake and queues review. An edit racing with closure is serialized by normal command ownership; once closed, review and retry use the frozen preferences. Reject changes to the method after intake closure, including while initial review is pending or failed; do not silently accept or queue them. The closed intake establishes this invariant without another lock flag or SETUP stage.
 
-Plans record their authoring method. Application context construction compares it with the therapy session's frozen method. When they match, conversation receives the complete plan. When they differ, it receives the new method's instructions plus only the prior plan's focus, goals, and cautions, labeled with the prior method/plan identity; old `approach` items are omitted from conversation context. This deterministic projection does not ask the model to classify old techniques as compatible, mutate the stored plan, or add a pre-session planning call. Retained fields remain prior strategy, not a claim that their prose is method-neutral.
+All therapy sessions and reviews use that fixed method, the complete current plan, and the latest useful handoff. No method-mismatch projection, pending method change, transition-specific replacement rule, or pre-session planning call is needed. Plan method provenance can be read from the source review session's preferences; no separate authoring-method field is required. Switching method is a deferred product feature that would need an explicit transition design for both plan and handoff, not just filtering plan fields.
 
-The retrospective reviewer still receives the complete starting plan, explicitly labeled as prior strategy, and must produce a replacement for the new method while preserving still-relevant goals/cautions. The deterministic no-conversation path remains no-change; merely editing preferences or opening an empty session does not generate a plan. Projection controls this plan input, not every possible method reference in historical patient wording or handoff prose; appropriate method use remains a qualitative admission check.
+Language and display name remain editable while idle. Therapy language freezes at session creation; later language edits are visibly pending for future sessions. Keep the small session snapshot for stable language and review retries, even without method switching. Display-name edits do not rewrite history. Merely editing presentation preferences or opening an empty session does not generate a plan; deterministic no-conversation review remains no-change.
 
 ## Intake
 
@@ -91,7 +91,7 @@ The retrospective reviewer still receives the complete starting plan, explicitly
 6. The initial review reads the full intake and produces a provisional plan and handoff. It records unknowns and questions for later clarification. A valid initial review requires a plan; it does not require a diagnosis or style score.
 7. Commit and enter `READY`. No assessment operation, catalog coverage validator, or post-assessment style-selection stage remains.
 
-R2 keeps chat input to session, client message identity, and text. Exact denial retention, actual review selection, and inclusion in the next context have distinct checks; storing raw text alone does not establish semantic continuity. R6 later adds explicit recall metadata together with browsing, selection, persistence, and idempotency support.
+R2 keeps chat input to session, client message identity, and text. Exact denial retention, actual review selection, and inclusion in the next context have distinct checks; storing raw text alone does not establish semantic continuity. R6 measures this baseline; only an evidence-backed optional R6a adds explicit recall metadata together with browsing, selection, persistence, and idempotency support.
 
 ## Live therapy
 
@@ -112,7 +112,7 @@ sequenceDiagram
     A-->>U: message_completed
 ```
 
-Same-ID retries reuse or regenerate the same accepted user message; changed content is a conflict. R6 extends that equality to explicit recall metadata when introduced. A partial stream is not a completed therapeutic record. If the provider ends with truncation, missing terminal status, refusal/filter failure, or blank text, no assistant completion is committed. The console marks any displayed partial as interrupted and offers retry/end; it must not leave it looking like a successful answer.
+Same-ID retries reuse or regenerate the same accepted user message; changed content is a conflict. Optional R6a extends that equality to explicit recall metadata only if introduced. A partial stream is not a completed therapeutic record. If the provider ends with truncation, missing terminal status, refusal/filter failure, or blank text, no assistant completion is committed. The console marks any displayed partial as interrupted and offers retry/end; it must not leave it looking like a successful answer.
 
 Retain the existing four NDJSON event shapes unless a specific UI need requires a change. Cancellation closes the SDK stream and drains critical database work before releasing mutation ownership. If cancellation occurs after commit but before the terminal event arrives, the client reconciles through history. There is no exactly-once-delivery claim over HTTP; there is idempotent durable acceptance/completion.
 

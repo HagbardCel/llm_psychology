@@ -4,7 +4,7 @@
 
 This is a proposed replacement architecture, not a description of implemented behavior. Prepared on **2026-09-06** against **`18d18898`**, branch `fix/phase-10-intake-completion`. No production code, database, model configuration, or existing assessment document was changed by this planning exercise. Existing canonical documents remain descriptions of the running implementation until the corresponding migration lands.
 
-Revised on **2026-09-21**, including PR #77 feedback on executable stack boundaries, withheld admission cases, and method transitions. The current-state analysis describes main at **`73492a5b`**; the original Phase-10 inspection and its evidence remain historical. Implementation starts from then-current main without requiring PR #76 to merge or close. One-call review remains unproven until R0b admission on the corrected R1 boundary.
+Revised on **2026-09-21**, including PR #77 feedback on executable stack boundaries, independent confirmation cases, and limiting feature scope. The current-state analysis describes main at **`73492a5b`**; the original Phase-10 inspection and its evidence remain historical. Implementation starts from then-current main without requiring PR #76 to merge or close. One-call review remains unproven until R0b admission on the corrected R1 boundary.
 
 ## Read the plan
 
@@ -25,13 +25,13 @@ The recommendations are engineering judgments informed by source inspection. The
 | Therapeutic actors | Two responsibilities, not an agent society: live conversation and retrospective review |
 | Model topology | One configured model by default; optional second review endpoint, with explicit credentials and capabilities |
 | Intake | Free-text orientation and user-controlled completion; remove extraction-driven completion; defer typed self-report controls pending an independent product need |
-| Preferences | Visible editable English/supportive defaults; no SETUP stage; intake preferences freeze at Finish Intake, therapy preferences at session creation |
-| Style | One preferred method; delete numerical ranking and unused plans for every style; omit prior-method plan approach items from conversation context on a method change |
+| Preferences | Visible English/supportive defaults; no SETUP stage; method editable until Finish Intake, language editable with stable session/retry snapshots |
+| Style | One method fixed at Finish Intake; delete numerical ranking and unused plans; defer post-intake switching and its transition machinery |
 | Retrospection | One bounded structured call, independently validated sections, one atomic commit; admit the compact schema before restructuring persistence |
 | Source truth | Messages own wording; profile owns user-editable preferences; interpretation stays labeled interpretation |
 | Longitudinal continuity | Current plan + latest useful handoff + selected, dated source references + bounded recent conversation |
 | Storage | Five tables: profile, sessions, messages, plans, memory references; review work status belongs to its session |
-| Context | One source serializer for byte accounting and full-session review; handoff anchors and recent references; explicit recall added in R6; no older review notes or purpose ranking |
+| Context | One source serializer for byte accounting and full-session review; handoff anchors and recent references measured in R6; recall only if justified as optional R6a; no older review notes or purpose ranking |
 | Configuration | Keep pydantic-settings/.env; simplify endpoint and call-policy types after six tasks become two; no TOML commitment |
 | Structured output | Target json_schema on one designated required review runtime; each additional advertised runtime needs separate admission; any alternative mode needs a named requirement |
 | Reliability | SDK retries disabled; at most one semantic/schema correction; explicit timeout, truncation, cancellation, and recovery behavior |
@@ -55,20 +55,21 @@ These changes intentionally remove some behavior: automatic intake completeness,
 | Phase | Coherent change | Main dependency |
 |---|---|---|
 | B0 | Refresh main inventory and baseline; separately fix the coroutine warning if reproduced | None |
-| R0a | Minimal schema, separate development/withheld confirmation fixtures, frozen rubric, canonical runtime selection | B0; can overlap R1 |
+| R0a | Minimal schema, development cases and confirmation requirements, frozen rubric, canonical runtime selection | B0; can overlap R1 |
 | R1 | Model-boundary correctness: finish, deadlines, caps, credentials, cancellation | B0; independent of architecture admission |
-| R0b | Final one-call review admission using the corrected model boundary | R0a + R1 |
+| R0b | Freeze candidate; independent evaluator creates fresh confirmation cases; final admission on corrected boundary | R0a + R1 |
 | R2a–R2e | Explicit schema/store → conversation/workflow → review/context → API/console → retirement stack | R1 + successful R0b |
 | R3 | Remove residual obsolete evidence machinery; keep only surviving hard contracts | R2 |
 | R4 | Standard logging and explicit sensitive capture/export | R3 |
 | R5 | Simplify two-task configuration and admitted structured parsing | R4 |
-| R6 | Explicit source recall/browsing and historical selection at 100-session scale | R5 |
-| R7 | Historical executable retirement, documentation, final acceptance | R6 |
+| R6 | Validate baseline continuity and performance at 100-session scale | R5 |
+| Optional R6a / R6b | Explicit recall for demonstrated gaps; lexical retrieval only for remaining gaps | R6 evidence; neither is guaranteed work |
+| R7 | Historical executable retirement, documentation, final acceptance | R6 + any selected evidence-backed extensions |
 
-R2 uses named stacked PRs on `feat/architecture-cutover`, reviewed against their predecessors, with owning tests and a passing `make check` in each layer. Intermediate branches need not be supported releases. Introduce target primitives while retaining old persistence required by active callers; wire the complete replacement in R2d and remove superseded owners with their final callers. No dual writes or compatibility adapters. Only the complete validated stack targets main, with surviving source-retention/next-context contracts. Do not import Phase-10 forensics. Each schema change increments its version and resets a disposable database; R6 may require a later reset for durable recall metadata, under the same no-migrations policy.
+R2 uses named stacked PRs on `feat/architecture-cutover`, reviewed against their predecessors, with owning tests and a passing `make check` in each layer. Intermediate branches need not be supported releases. Introduce target primitives while retaining old persistence required by active callers; wire the complete replacement in R2d and remove superseded owners with their final callers. No dual writes or compatibility adapters. Only the complete validated stack targets main, with surviving source-retention/next-context contracts. Do not import Phase-10 forensics. Each schema change increments its version and resets a disposable database; optional R6a requires a later reset only if its recall feature is justified, under the same no-migrations policy.
 
 ## Acceptance and limits
 
-The target must demonstrate a successful two-session journey, source traceability through a later correction, atomic failure/retry behavior, useful anchor/recent-source continuity, and bounded prompts; R6 adds explicit recall. R0b tests one designated reviewer using R1 transport semantics: tune on 6–8 development cases, freeze the candidate, then rerun all development cases and run 3–4 untouched confirmation cases once each. At most one correction is allowed per case. Confirmation-informed revisions require fresh withheld cases. Check that a small plan change preserves unrelated relevant goals/cautions. If admission fails, revise the schema or call design before cutover; a small holdout does not prove general reliability. Optional runtimes do not block this gate, and no production flag maintains competing pipelines.
+The target must demonstrate a successful two-session journey, source traceability through a later correction, atomic failure/retry behavior, useful anchor/recent-source continuity, and bounded prompts. R6 measures the baseline before any recall feature is selected. R0b tests one designated reviewer using R1 transport semantics: tune on 6–8 development cases, freeze the candidate including sampling/reasoning settings, then have a separate evaluator create 3–4 fresh confirmation cases without candidate outputs. Rerun all development cases and run confirmation once each under the frozen rubric. At most one correction is allowed per case. Confirmation-informed revisions require fresh cases. Check that a small plan change preserves unrelated relevant goals/cautions. If admission fails, revise the schema or call design before cutover; a small holdout does not prove general reliability. Optional runtimes do not block this gate, and no production flag maintains competing pipelines.
 
 Large-history deterministic fixtures are cheap and required. Long live journeys and repeated model benchmarks are not routine gates. No live model was exercised to validate this proposed architecture. See the planning-deliverable validation record in the [migration plan](06-migration-plan.md) for checks of these documents.

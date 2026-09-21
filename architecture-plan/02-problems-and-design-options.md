@@ -32,7 +32,7 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Alternatives:** generate only a recommendation and then a selected plan (two calls); generate a style-neutral plan then adapt live; choose preference before assessment and generate one plan.
 
-**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Idle preference edits apply to subsequent intake replies; Finish Intake freezes the final preferences for initial planning. Therapy preferences freeze at session creation, with later edits pending for future sessions. No separate SETUP gate, automatic style switching, or unsupported claim that one packaged method is clinically best.
+**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Idle preference edits apply to subsequent intake replies; Finish Intake freezes the method for all later therapy and the final intake preferences for initial planning. Language remains editable, with therapy language frozen per session. No separate SETUP gate, post-intake method switching, or unsupported claim that one packaged method is clinically best.
 
 ### P3. The second retrospective call has a costly authority boundary
 
@@ -150,7 +150,7 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** two serial passes, one compact structured call, an unstructured note followed by extraction.
 
-**Choice and why:** provisionally one call, frozen only after R0b admission on the corrected R1 model boundary. R0a prepares the minimal schema, 6–8 development cases, and 3–4 separately prepared confirmation cases withheld from tuning, while R1 can proceed independently. Final admission uses a frozen candidate on the entire development set and then the untouched confirmation set; an output-informed revision requires fresh confirmation cases. Completed transcript, current plan, previous handoff, and selected patient sources supply both analysis and next-step reasoning; older review notes are initially excluded. Validate sections separately and commit together. Another generated intermediary is not an established independent clinical check.
+**Choice and why:** provisionally one call, frozen only after R0b admission on the corrected R1 model boundary. R0a prepares the minimal schema, 6–8 development cases, and confirmation requirements, while R1 can proceed independently. After candidate freeze, a separate evaluator authors 3–4 fresh confirmation cases without seeing candidate outputs; fixtures are fixed before execution. Final admission uses that candidate on the entire development set and then the untouched confirmation set; an output-informed revision requires fresh confirmation cases. Completed transcript, current plan, previous handoff, and selected patient sources supply both analysis and next-step reasoning; older review notes are initially excluded. Validate sections separately and commit together. Another generated intermediary is not an established independent clinical check.
 
 **Trade-offs:** larger single output; one invalid section invalidates the whole result; the model may mix interpretation with recommendation. Full plan replacement may lose unrelated goals/cautions even when structurally valid: development and confirmation cases explicitly test a small approach change while those remain relevant. Tight schemas, source labels, and targeted trials are required. Combining calls is not guaranteed to halve elapsed time, and a small holdout does not establish general reliability.
 
@@ -192,11 +192,11 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** raw replay, model-authored facts, source-reference selection, SQLite full-text search, embeddings/vector storage.
 
-**Choice and why:** R2 starts with active handoff anchors, preceding unanswered patient input, then recent distinct memory references. Remove model-authored purpose labels and their priority rules. Order candidates by selecting-session chronology, source sequence, and a stable ID tie-breaker. R6 adds explicit recall with its complete user flow. At five selections per review, 100 sessions supply about 500 references; measure before adding term extraction or ranking infrastructure. No extracted biography or rewritten history summary is stored.
+**Choice and why:** R2 starts with active handoff anchors, preceding unanswered patient input, then recent distinct memory references. Remove model-authored purpose labels and their priority rules. Order candidates by selecting-session chronology, source sequence, and a stable ID tie-breaker. R6 measures this baseline at 100 sessions, roughly 500 references at five selections per review. Explicit recall is optional R6a, justified only by a material continuity gap it can demonstrably address. No extracted biography or rewritten history summary is stored.
 
-**Trade-offs:** recency cannot automatically find every old relevant event, and a bounded handoff can forget an old concern. R2 offers basic history/source inspection; explicit inclusion arrives in R6. Measure unanchored misses separately from mandatory-source correctness; preserving a source does not guarantee its prompt inclusion.
+**Trade-offs:** recency cannot automatically find every old relevant event, and a bounded handoff can forget an old concern. R2 offers basic history/source inspection without a promise of user-directed prompt inclusion. Measure unanchored misses separately from mandatory-source correctness; preserving a source does not guarantee its prompt inclusion. A documented acceptable limitation need not become a new feature.
 
-**Revisit when:** R6's fixed 100-session recall set demonstrates a material gap despite anchors and explicit recall. A separate R6b may add bounded parameterized lexical matching and compare the same cases. Consider SQLite FTS5 only if that approach remains inadequate; embeddings need a further demonstrated semantic gap. Neither is a default migration deliverable. [SQLite FTS5 documentation](https://www.sqlite.org/fts5.html)
+**Revisit when:** R6's fixed 100-session cases demonstrate a material gap. First test whether explicit source selection remedies it before committing to R6a's UI/storage/API work. Only remaining demonstrated gaps after that justify optional R6b bounded parameterized lexical matching, compared on the same cases. Consider SQLite FTS5 only if that approach remains inadequate; embeddings need a further demonstrated semantic gap. None is a default migration deliverable. [SQLite FTS5 documentation](https://www.sqlite.org/fts5.html)
 
 ### D7. Standard logs for operation; small direct evidence for tests
 
@@ -242,9 +242,9 @@ One canonical `serialize_review_session_source` function owns the source block u
 
 ### D11. Preferences are metadata, not a SETUP stage
 
-**Choice and why:** initialize profile and intake together with visible English/supportive defaults; display name is optional. Intake preferences remain editable while idle until Finish Intake atomically freezes them for initial review. Therapy snapshots preferences at session creation; later edits apply to future sessions. Review retries retain the closed session's preferences. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
+**Choice and why:** initialize profile and intake together with visible English/supportive defaults; display name is optional. Intake preferences remain editable while idle until Finish Intake atomically freezes the method for all later therapy and snapshots final intake preferences for initial review. Reject later method changes, including during failed initial review. Language remains editable; therapy snapshots it at session creation, with later edits pending for future sessions. Review retries retain the closed session's preferences. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
 
-**Trade-off:** the default language/method is a product default, not an explicit patient choice or clinical recommendation. The console must make defaults and pending changes visible. Reinstate a setup gate only for a demonstrated requirement that cannot be met through editable metadata.
+**Trade-off:** the default language/method is a product default, not an explicit patient choice or clinical recommendation. The console must show defaults, explain that Finish Intake fixes the method, and distinguish pending language edits. Method switching adds a new product feature and transition semantics for both plan and handoff; field projection cannot ensure method-neutral prose. Defer it to a demonstrated need. Session snapshots still earn their cost through stable language and retry behavior. Reinstate a setup gate only for a demonstrated requirement that cannot be met through editable metadata.
 
 ## Dependencies and abstraction ledger
 
