@@ -25,8 +25,8 @@ The recommendations are engineering judgments informed by source inspection. The
 | Therapeutic actors | Two responsibilities, not an agent society: live conversation and retrospective review |
 | Model topology | One configured model by default; optional second review endpoint, with explicit credentials and capabilities |
 | Intake | Free-text orientation and user-controlled completion; remove extraction-driven completion; defer typed self-report controls pending an independent product need |
-| Method/language settings | Visible English/supportive defaults; no SETUP stage; profile alone owns method, editable until Finish Intake; sessions preserve only scalar language for review/retry |
-| Style | One method fixed at Finish Intake; delete numerical ranking and unused plans; defer post-intake switching and its transition machinery |
+| Method/language settings | English language default and initially unselected method; no SETUP stage; profile alone owns method; sessions preserve only scalar language for review/retry |
+| Style | Choose a packaged method during intake; Finish Intake requires a valid choice and makes it immutable; delete numerical ranking and unused plans; defer post-intake switching |
 | Retrospection | One bounded structured call, independently validated sections, one atomic commit; admit the compact schema before restructuring persistence |
 | Source truth | Messages own wording; profile owns method and default language; sessions own their language; interpretation stays labeled interpretation |
 | Longitudinal continuity | Current plan + latest useful handoff + selected, dated source references + bounded recent conversation |

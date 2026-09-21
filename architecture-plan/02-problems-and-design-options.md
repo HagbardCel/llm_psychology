@@ -18,7 +18,7 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Simpler alternatives:** a patient-completed questionnaire; free intake conversation with explicit completion; a much smaller extractor which only recommends the next question. The last option still puts extraction latency and failure in the live path.
 
-**Direction:** free-text intake with an explicit **finish intake** command and a short displayed orientation checklist. Retain complete wording; review selects whole sources and identifies unknowns without making them a gate. Defer typed self-report controls until an independent product requirement justifies their API/storage/UI cost. No minimum beyond a nonblank patient contribution, maximum-turn completion heuristic, or inferred readiness label.
+**Direction:** free-text intake with an explicit **finish intake** command and a short displayed orientation checklist. Retain complete wording; review selects whole sources and identifies unknowns without making them a gate. Defer typed self-report controls until an independent product requirement justifies their API/storage/UI cost. Finish requires a nonblank patient contribution and a valid user-selected packaged method, not clinical completeness, a maximum-turn completion heuristic, or an inferred readiness label.
 
 ### P2. Assessment generates alternatives the application never uses
 
@@ -28,11 +28,11 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Problem:** most generated plans are discarded. Scores look more precise than their evidence warrants. Catalog edits can invalidate interpretation of historical assessments. The compulsory style-selection stage exists because assessment produces a catalog-shaped result.
 
-**Keep the requirement?** Keep user choice and a meaningful style effect. Drop generated ranking and frozen lifetime selection.
+**Keep the requirement?** Keep user choice and a meaningful style effect. Drop generated ranking; freeze the chosen method at Finish Intake and defer post-intake switching.
 
 **Alternatives:** generate only a recommendation and then a selected plan (two calls); generate a style-neutral plan then adapt live; choose method before assessment and generate one plan.
 
-**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Idle method/language edits apply to subsequent intake replies; Finish Intake freezes the method for all later therapy and the intake language for initial planning. Language remains editable, with therapy language frozen per session. No separate SETUP gate, post-intake method switching, or unsupported claim that one packaged method is clinically best.
+**Direction:** start intake in English with no method selected and display the existing packaged methods (`jung`, `cbt`, `freud`) with plain descriptions. Intake chat uses the common orientation/safety policy until selection; subsequent replies use the selected method's instructions. Idle method/language edits apply to later replies. Finish Intake requires a valid catalog choice, freezes it for all later therapy, and freezes intake language for initial planning. Language remains editable, with therapy language frozen per session. “Supportive” remains a common stance, not a fourth method. No separate SETUP gate, post-intake method switching, or unsupported claim that one packaged method is clinically best.
 
 ### P3. The second retrospective call has a costly authority boundary
 
@@ -242,9 +242,9 @@ One canonical `serialize_review_session_source` function owns the source block u
 
 ### D11. Method and language are settings, not a SETUP stage
 
-**Choice and why:** initialize profile and intake together with visible English/supportive defaults. Omit display name because no target prompt or console personalization consumer requires it. The profile alone owns `method`, editable during intake and immutable after Finish Intake, including failed initial review/retry. Each session stores scalar `language`: editable with the profile default during intake, frozen at closure for initial review, and frozen at creation for therapy. Later profile language edits apply to future sessions. Reviews/retries read immutable profile method plus session language; no generic preference snapshot or plan-method provenance rule remains. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
+**Choice and why:** initialize profile and intake together with English language and `method=null`. Chat may start immediately; Finish Intake requires a valid user-selected packaged method and at least one nonblank patient message. Omit display name because no target prompt or console personalization consumer requires it. The profile alone owns `method`, null or catalog-valid during intake and non-null/immutable after closure, including failed initial review/retry. Each session stores scalar `language`: editable with the profile default during intake, frozen at closure for initial review, and frozen at creation for therapy. Later profile language edits apply to future sessions. Reviews/retries read immutable profile method plus session language; no generic preference snapshot or plan-method provenance rule remains. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
 
-**Trade-off:** the default language/method is a product default, not an explicit patient choice or clinical recommendation. The console must show defaults, explain that Finish Intake fixes the method, and distinguish pending language edits. Method switching adds a new product feature and transition semantics for both plan and handoff; field projection cannot ensure method-neutral prose. Defer it, including any method revision/provenance model, to a demonstrated need. Only language needs a session-specific value for stable retry behavior. Reinstate a setup gate only for a demonstrated requirement that cannot be met through editable metadata.
+**Trade-off:** English is a product language default, not evidence of explicit choice. A method choice is required before finishing intake, but does not block conversation or assert clinical suitability. The console must show the unselected state/catalog, explain the finish requirement and subsequent immutability, and distinguish pending language edits. Choosing an existing method by default would make an unrequested therapeutic choice; adding a “supportive” method would introduce unneeded assets and behavior. Method switching adds a new product feature and transition semantics for both plan and handoff; defer it, including any revision/provenance model, to a demonstrated need. Only language needs a session-specific value for stable retry behavior. No new setup or style-selection stage is needed.
 
 ## Dependencies and abstraction ledger
 
