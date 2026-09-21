@@ -25,7 +25,7 @@ The recommendations are engineering judgments informed by source inspection. The
 | Therapeutic actors | Two responsibilities, not an agent society: live conversation and retrospective review |
 | Model topology | One configured model by default; optional second review endpoint, with explicit credentials and capabilities |
 | Intake | Free-text orientation and user-controlled completion; remove extraction-driven completion; defer typed self-report controls pending an independent product need |
-| Preferences | Visible English/supportive defaults; no SETUP stage; method editable until Finish Intake, language editable with stable session/retry snapshots |
+| Preferences | Visible English/supportive defaults; no SETUP stage; profile alone owns method, editable until Finish Intake; sessions preserve only scalar language for review/retry |
 | Style | One method fixed at Finish Intake; delete numerical ranking and unused plans; defer post-intake switching and its transition machinery |
 | Retrospection | One bounded structured call, independently validated sections, one atomic commit; admit the compact schema before restructuring persistence |
 | Source truth | Messages own wording; profile owns user-editable preferences; interpretation stays labeled interpretation |
@@ -57,19 +57,21 @@ These changes intentionally remove some behavior: automatic intake completeness,
 | B0 | Refresh main inventory and baseline; separately fix the coroutine warning if reproduced | None |
 | R0a | Minimal schema, development cases and confirmation requirements, frozen rubric, canonical runtime selection | B0; can overlap R1 |
 | R1 | Model-boundary correctness: finish, deadlines, caps, credentials, cancellation | B0; independent of architecture admission |
-| R0b | Freeze candidate; independent evaluator creates fresh confirmation cases; final admission on corrected boundary | R0a + R1 |
+| R0b | Freeze candidate; pass full development rerun before independent confirmation construction/execution | R0a + R1 |
 | R2a–R2e | Explicit schema/store → conversation/workflow → review/context → API/console → retirement stack | R1 + successful R0b |
 | R3 | Remove residual obsolete evidence machinery; keep only surviving hard contracts | R2 |
 | R4 | Standard logging and explicit sensitive capture/export | R3 |
 | R5 | Simplify two-task configuration and admitted structured parsing | R4 |
-| R6 | Validate baseline continuity and performance at 100-session scale | R5 |
+| R6 | Validate baseline continuity and performance at 100-session scale | Complete R2; independent of R3–R5 |
 | Optional R6a / R6b | Explicit recall for demonstrated gaps; lexical retrieval only for remaining gaps | R6 evidence; neither is guaranteed work |
-| R7 | Historical executable retirement, documentation, final acceptance | R6 + any selected evidence-backed extensions |
+| R7 | Historical executable retirement, documentation, final acceptance | R5 + R6 + any selected evidence-backed extensions |
 
 R2 uses named stacked PRs on `feat/architecture-cutover`, reviewed against their predecessors, with owning tests and a passing `make check` in each layer. Intermediate branches need not be supported releases. Introduce target primitives while retaining old persistence required by active callers; wire the complete replacement in R2d and remove superseded owners with their final callers. No dual writes or compatibility adapters. Only the complete validated stack targets main, with surviving source-retention/next-context contracts. Do not import Phase-10 forensics. Each schema change increments its version and resets a disposable database; optional R6a requires a later reset only if its recall feature is justified, under the same no-migrations policy.
 
+After R2, R3 → R4 → R5 cleanup and R6 baseline measurement can proceed independently. R6 may use R3's cleaned harness without requiring it. Final acceptance joins both paths; optional feature work can wait until cleanup finishes. Reuse early R6 evidence unless intervening changes invalidate what it measured.
+
 ## Acceptance and limits
 
-The target must demonstrate a successful two-session journey, source traceability through a later correction, atomic failure/retry behavior, useful anchor/recent-source continuity, and bounded prompts. R6 measures the baseline before any recall feature is selected. R0b tests one designated reviewer using R1 transport semantics: tune on 6–8 development cases, freeze the candidate including sampling/reasoning settings, then have a separate evaluator create 3–4 fresh confirmation cases without candidate outputs. Rerun all development cases and run confirmation once each under the frozen rubric. At most one correction is allowed per case. Confirmation-informed revisions require fresh cases. Check that a small plan change preserves unrelated relevant goals/cautions. If admission fails, revise the schema or call design before cutover; a small holdout does not prove general reliability. Optional runtimes do not block this gate, and no production flag maintains competing pipelines.
+The target must demonstrate a successful two-session journey, source traceability through a later correction, atomic failure/retry behavior, useful anchor/recent-source continuity, and bounded prompts. R6 measures the baseline before any recall feature is selected. R0b tests one designated reviewer using R1 transport semantics: tune on 6–8 development cases, freeze the candidate including sampling/reasoning settings, and rerun the complete development set. Only after all pass, have a separate evaluator create 3–4 fresh confirmation cases without candidate outputs, then freeze and run them once each on the unchanged candidate. At most one correction is allowed per case. Confirmation-informed revisions require fresh cases. Check that a small plan change preserves unrelated relevant goals/cautions. If admission fails, revise the schema or call design before cutover; a small holdout does not prove general reliability. Optional runtimes do not block this gate, and no production flag maintains competing pipelines.
 
 Large-history deterministic fixtures are cheap and required. Long live journeys and repeated model benchmarks are not routine gates. No live model was exercised to validate this proposed architecture. See the planning-deliverable validation record in the [migration plan](06-migration-plan.md) for checks of these documents.
