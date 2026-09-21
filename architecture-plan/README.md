@@ -4,7 +4,7 @@
 
 This is a proposed replacement architecture, not a description of implemented behavior. Prepared on **2026-09-06** against **`18d18898`**, branch `fix/phase-10-intake-completion`. No production code, database, model configuration, or existing assessment document was changed by this planning exercise. Existing canonical documents remain descriptions of the running implementation until the corresponding migration lands.
 
-Revised on **2026-09-20** after review of the migration strategy. The original current-state analysis remains a dated inspection; the target below incorporates the revised decisions. One-call review and endpoint compatibility remain unproven until R0 admission.
+Revised on **2026-09-21** after two rounds of migration review. The current-state analysis now describes main at **`73492a5b`**; the original Phase-10 inspection and its evidence remain historical. Implementation starts from then-current main without requiring PR #76 to merge or close. One-call review remains unproven until R0b admission on the corrected R1 boundary.
 
 ## Read the plan
 
@@ -24,16 +24,16 @@ The recommendations are engineering judgments informed by source inspection. The
 | Deployment | One asyncio backend, one SQLite database, one console using the existing HTTP boundary |
 | Therapeutic actors | Two responsibilities, not an agent society: live conversation and retrospective review |
 | Model topology | One configured model by default; optional second review endpoint, with explicit credentials and capabilities |
-| Intake | Brief conversational orientation, user-controlled completion, optional explicit self-report inputs; remove extraction-driven slot completion |
-| Preferences | Start directly in intake with visible, editable English/supportive defaults; no SETUP stage; freeze session preferences at first accepted input |
+| Intake | Free-text orientation and user-controlled completion; remove extraction-driven completion; defer typed self-report controls pending an independent product need |
+| Preferences | Visible editable English/supportive defaults; no SETUP stage; intake preferences freeze at Finish Intake, therapy preferences at session creation |
 | Style | One preferred method; delete numerical ranking and unused plans for every style |
 | Retrospection | One bounded structured call, independently validated sections, one atomic commit; admit the compact schema before restructuring persistence |
-| Source truth | Messages own wording; explicit user inputs own preferences/self-reports; interpretation stays labeled interpretation |
+| Source truth | Messages own wording; profile owns user-editable preferences; interpretation stays labeled interpretation |
 | Longitudinal continuity | Current plan + latest useful handoff + selected, dated source references + bounded recent conversation |
 | Storage | Five tables: profile, sessions, messages, plans, memory references; review work status belongs to its session |
-| Context | Full completed session within one fixed product envelope; complete recent exchanges; active anchors, explicit recall, then recent memory references; lexical retrieval only after measured need |
+| Context | One source serializer for byte accounting and full-session review; handoff anchors and recent references; explicit recall added in R6; no older review notes or purpose ranking |
 | Configuration | Keep pydantic-settings/.env; simplify endpoint and call-policy types after six tasks become two; no TOML commitment |
-| Structured output | Target json_schema only after intended llama.cpp/MTPLX configurations pass admission; any alternative needs a named requirement |
+| Structured output | Target json_schema on one designated required review runtime; each additional advertised runtime needs separate admission; any alternative mode needs a named requirement |
 | Reliability | SDK retries disabled; at most one semantic/schema correction; explicit timeout, truncation, cancellation, and recovery behavior |
 | Observability | Standard structured logging; separately enabled sensitive payload capture; explicit database export; no operational log consumer is a correctness dependency |
 | Evaluation | Deterministic gate, small endpoint/model admission checks, focused qualitative replays, occasional short journeys |
@@ -54,19 +54,21 @@ These changes intentionally remove some behavior: automatic intake completeness,
 
 | Phase | Coherent change | Main dependency |
 |---|---|---|
-| R0 | Requirements, warning-free baseline, compact one-call review and endpoint admission spike | None |
-| R1 | Model-boundary correctness: finish, deadlines, caps, credentials, cancellation | R0 admission |
-| R2 | Breaking therapeutic/storage cutover, reviewed as a stack on an integration branch | R1 |
+| B0 | Refresh main inventory and baseline; separately fix the coroutine warning if reproduced | None |
+| R0a | Minimal schema, frozen fixtures/rubric, canonical runtime selection | B0; can overlap R1 |
+| R1 | Model-boundary correctness: finish, deadlines, caps, credentials, cancellation | B0; independent of architecture admission |
+| R0b | Final one-call review admission using the corrected model boundary | R0a + R1 |
+| R2a–R2e | Explicit schema/store → conversation/workflow → review/context → API/console → retirement stack | R1 + successful R0b |
 | R3 | Remove residual obsolete evidence machinery; keep only surviving hard contracts | R2 |
 | R4 | Standard logging and explicit sensitive capture/export | R3 |
 | R5 | Simplify two-task configuration and admitted structured parsing | R4 |
-| R6 | Historical selection and source inspection at 100-session scale | R5 |
+| R6 | Explicit source recall/browsing and historical selection at 100-session scale | R5 |
 | R7 | Historical executable retirement, documentation, final acceptance | R6 |
 
-R2 uses stacked reviewable PRs or individually reviewed commits on a short-lived integration branch. Intermediate branches need not be supported releases. Merge the complete vertical flow into main only after its gates pass; one development-database reset replaces compatibility adapters. Retire extraction-specific assertions with extraction itself, and add surviving source-retention/next-context tests in the same cutover. Do not rebuild old forensics before deleting their owner.
+R2 uses named stacked PRs on `feat/architecture-cutover`, reviewed against their predecessors, with owning tests in each layer. Intermediate branches need not be supported releases. Only the complete validated stack targets main. Retire old owners and assertions together and land surviving source-retention/next-context contracts before integration. Do not import Phase-10 forensics. R2 resets a disposable database; R6 may require a later schema reset for durable recall metadata, under the same no-migrations policy.
 
 ## Acceptance and limits
 
-The target must demonstrate a successful two-session journey, source traceability through a later correction, atomic failure/retry behavior, useful anchor/explicit-recall continuity, and bounded prompts. R0 tests the single review call on 6–10 frozen completed-session cases before production restructuring. If the intended local reviewer cannot produce useful valid output within one correction, revise the schema or call design before proceeding. No production flag maintains competing pipelines.
+The target must demonstrate a successful two-session journey, source traceability through a later correction, atomic failure/retry behavior, useful anchor/recent-source continuity, and bounded prompts; R6 adds explicit recall. R0b tests one designated reviewer on 6–10 frozen cases using R1 transport semantics. If it cannot produce useful valid output within one correction, revise the schema or call design before cutover. Optional runtimes do not block this gate, and no production flag maintains competing pipelines.
 
 Large-history deterministic fixtures are cheap and required. Long live journeys and repeated model benchmarks are not routine gates. No live model was exercised to validate this proposed architecture. See the planning-deliverable validation record in the [migration plan](06-migration-plan.md) for checks of these documents.

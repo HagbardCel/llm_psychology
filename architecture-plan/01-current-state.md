@@ -2,19 +2,27 @@
 
 ## Scope and method
 
-Baseline: `18d18898`, inspected on 2026-09-06. The working tree already contained an edit to `docs/README.md`, untracked `docs/assessments/`, and an untracked file named `-l`. These were left intact. The existing assessments were read as prior reasoning, not as constraints on this proposal. No patient database, `.env` secrets, raw patient trace, or simulation transcript was needed for the architecture review.
+Implementation baseline: local `main` at **`73492a5b8052cb5fc2ea0a3d02ae0fd6d910f452`**, the merge of PR #75 / Phase 9, inspected through Git objects on **2026-09-20**. The editing checkout remains the Phase-10 branch; this document describes main, not that checkout. Refresh the SHA/inventory in B0 if main advances. No patient database, `.env` secrets, raw patient trace, or simulation transcript was needed.
 
-Inspection covered the six canonical documents, test/eval ownership, composition, workflow, application helpers, SQL/schema, phase processors and prompts, context packers, gateway/configuration, diagnostics, HTTP/console boundaries, test owners, simulation actor/runner/audit, and closed experiment outcomes. Important execution paths were traced across these boundaries. This is architectural inspection, not a claim of line-by-line security verification of every test or historical artifact.
+The original inspection covered canonical docs, runtime flows, persistence, model/context boundaries, diagnostics, clients, and test/eval owners. This refresh compared main against that inspection, checked the complete production diff, and inspected main's changed prompt, diagnostics/eval owners, schema version, and tracked source inventory. Unchanged runtime-flow findings carry forward. This is architectural inspection, not a line-by-line security review. Relative source links name paths present on main; use the pinned SHA when the editing branch differs. The prior Phase-10 inspection remains in [the original planning commit](https://github.com/HagbardCel/llm_psychology/blob/632cdcbf36194f9090f0a1a061c0c5c0935cfa17/architecture-plan/01-current-state.md).
 
-A filesystem count of Python source, including comments and blank lines, found:
+A count of tracked Python files from this main revision, including comments and blank lines, found:
 
 | Area | Files | Lines |
 |---|---:|---:|
-| Production `src/jung` | 75 | 14,486 |
-| `tests` including manual smoke | 120 | 32,675 |
-| `evals` | 18 | 9,927 |
+| Production `src/jung` | 75 | 14,432 |
+| `tests` including manual smoke | 118 | 29,695 |
+| `evals` | 15 | 6,922 |
 
 Counts identify concentrations, not defects. A correctness test is not unnecessary merely because it is long.
+
+## Phase-10 investigation: historical, not the implementation base
+
+At this inspection, `fix/phase-10-intake-completion` at `301d8bb` is 12 commits ahead of main, with no commits behind. [PR #76](https://github.com/HagbardCel/llm_psychology/pull/76) was open and unmerged when checked. Its description labels the outcome “Defect verified / journey incomplete,” records the historical canary's `intake_turn_limit_exceeded`, and states that remediated-head focused live validation was not run. Do not describe it as a proven final intake architecture or a completed successful journey.
+
+The branch adds a narrow denial-prompt improvement, `intake.turn.evaluated` diagnostics, a diagnostic sink protocol, and extensive extraction/evidence reconstruction. Its investigation exposed clear-denial failures, ambiguous attempt correlation, observed-versus-committed state, and primary/cleanup failure handling. Preserve those lessons and the recorded limits, but do not port the forensic engine merely to delete it. Main has neither `intake_forensics.py` nor the Category-C evidence writer/live test. Its existing diagnostic recorder and simulation audit still require R3/R4 simplification.
+
+Implementation starts from main without requiring PR #76 to merge or close. Retain the existing Phase-10 history and private evidence. Planning documents can move independently; the narrow old-extractor prompt fix is not an automatic prerequisite. Historical evidence is not admission for the new schema. B0 must measure main's own tests/warnings rather than reuse Phase-10 counts.
 
 ## Runtime and ownership
 
@@ -121,7 +129,7 @@ The [evidence validator](../src/jung/phases/post_session/evidence_validation.py)
 
 ## LLM transport, configuration, and reliability
 
-The actual boundary is [OpenAICompatibleLLM](../src/jung/llm/openai_compatible.py), using `AsyncOpenAI` with `max_retries=0`. It supports `json_schema`, `json_object`, and prompt JSON. [structured.py](../src/jung/llm/structured.py) transforms/validates the strict schema, removes a surrounding JSON fence, validates Pydantic output, and constructs a correction request. Structural or processor semantic errors get at most one correction. Transport failures do not.
+The actual boundary is [OpenAICompatibleLLM](../src/jung/llm/openai_compatible.py), using `AsyncOpenAI` with `max_retries=0`. It supports `json_schema`, `json_object`, and prompt JSON. [structured.py](../src/jung/llm/structured.py) transforms/validates the strict schema, removes a surrounding JSON fence, validates Pydantic output, and constructs a correction request. Structural or processor semantic errors get at most one correction. Transport failures do not. Main's intake prompt is `intake-v3`; it lacks the Phase-10 instructions explicitly classifying clear denials as informative and limiting extraction to addressed safety dimensions.
 
 Important limits of the implementation:
 
@@ -144,15 +152,15 @@ The four live surfaces are distinct and useful in intent:
 | Surface | Actual implementation |
 |---|---|
 | Compatibility smoke | Processor-level local calls plus evidence checks under `tests/smoke` |
-| Hard invariants | Canary non-disclosure, exact sentinel resistance, citation integrity, selected safety negation, intake clear-denial retention |
+| Hard invariants | Canary non-disclosure, exact sentinel resistance, citation integrity, selected post-session safety negation; no dedicated Category-C intake denial test on main |
 | Behavioral report | Human-review matrix; full workload documents about 57 requests; successful report generation is not clinical approval |
 | Simulation | Real HTTP journey, isolated SQLite, synthetic patient, runtime trace, checkpoints, mechanical audit and narrative artifacts |
 
-The [patient actor](../evals/simulation/patient.py) receives scenario and patient-visible dialogue, not plans/reviews/prompts. Preserve that separation. The [runner](../evals/simulation/runner.py) exercises the full intake → assessment → style → therapy → review flow. [audit.py](../evals/simulation/audit.py) is 2,212 lines; [intake_forensics.py](../evals/simulation/intake_forensics.py) is 1,370; [intake_risk_denial_evidence.py](../evals/intake_risk_denial_evidence.py) is 852. These reconstruct intermediate relationships from traces, digests, and snapshots, beyond checking final therapeutic state.
+The [patient actor](../evals/simulation/patient.py) receives scenario and patient-visible dialogue, not plans/reviews/prompts. Preserve that separation. Main's [runner](../evals/simulation/runner.py) is 1,085 lines and exercises intake → assessment → style → therapy → review. Its [audit.py](../evals/simulation/audit.py) is already 1,905 lines, checking API journey, trace, checkpoints, and durable relationships. The separate Phase-10 intake-forensics and Category-C evidence engines are absent. Audit simplification and preservation of primary failures remain relevant, but the deletion inventory must not count absent files.
 
 The deterministic suite has real strengths: rejection/idempotency, cancellation while persistence is in flight, operation retry handoff, schema invariants, API stream identity/order, prompt budgets, provenance, and eval-harness failure paths. `make check` runs format, lint, local doc links, unit/integration tests, and one console probe. Live tests are excluded.
 
-Historical outcomes are informative but limited. [Phase 8B](../evals/phase8b/OUTCOME.md) did not measure interactive first-token latency; its selected concurrent report configuration had a modest fixture-specific advantage. [Phase 8C](../evals/phase8c/OUTCOME.md) was inconclusive after genuine failures. [Phase 8D](../evals/phase8d/OUTCOME.md) found cheaper synthetic-patient calls with thinking disabled but an older intake path still failed. None establishes success or failure of the current intake-v4 code or the proposed architecture.
+Historical outcomes are informative but limited. [Phase 8B](../evals/phase8b/OUTCOME.md) did not measure interactive first-token latency; its selected concurrent report configuration had a modest fixture-specific advantage. [Phase 8C](../evals/phase8c/OUTCOME.md) was inconclusive after genuine failures. [Phase 8D](../evals/phase8d/OUTCOME.md) found cheaper synthetic-patient calls with thinking disabled but an older intake path still failed. None admits the proposed architecture; Phase-10 outcomes must likewise retain their exact revision and measured-property limits.
 
 ## Safety behavior actually present
 
