@@ -48,6 +48,7 @@ class IntakeProcessor:
         merge_diagnostics: IntakeMergeDiagnostics | None = None
         extraction_failed = False
         record_changed = False
+        extraction_target: str | None = None
         latest_turn = self._latest_user_turn(input)
 
         if latest_turn is not None and input.latest_user_message:
@@ -55,6 +56,7 @@ class IntakeProcessor:
                 record,
                 patient_turn_count=input.patient_turn_count,
             )
+            extraction_target = prompted_item
             extraction = await self._gateway.generate_structured(
                 build_patch_extraction_messages(
                     record=record,
@@ -132,6 +134,7 @@ class IntakeProcessor:
             merged_record=record,
             record_changed=record_changed,
             completeness_complete=gate_complete,
+            extraction_target=extraction_target,
             next_required_item=completeness.next_required_item,
             max_turn_completion_blocked=max_turn_completion_blocked,
             merge_diagnostics=merge_diagnostics,

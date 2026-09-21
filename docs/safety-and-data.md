@@ -140,7 +140,7 @@ schema bump. Layers own kinds as follows:
 | Owner | Example kinds |
 | --- | --- |
 | Application / workflow | `workflow.command.*`, stage transition records |
-| Chat streaming | `chat.turn.*` (accepted / started / retried / reused / failed / cancelled) |
+| Chat streaming | `chat.turn.*` (accepted / started / retried / reused / failed / cancelled), `intake.turn.evaluated` |
 | Operations | `operation.*` |
 | LLM gateway | `llm.call.*`, `llm.provider.*`, `llm.validation.*` |
 | Runtime / recorder | `runtime.error`, `diagnostics.*` |
@@ -159,6 +159,12 @@ warn once to stderr and never change application outcome.
 
 When `JUNG_DEBUG_RUN_DIR` is unset, no diagnostic directory is created and
 runtime behavior is unchanged.
+
+`intake.turn.evaluated` is metadata-only: extraction target, merge counts,
+bounded drop-reason codes, and completion flags. It never carries patient text,
+therapist text, extracted values, evidence quotes, or prompts. Combine it with
+simulation `audit.md` (primary run-local review artifact) and the PR summary
+for intake turn-limit diagnosis.
 
 ## Erasing local data
 

@@ -15,7 +15,7 @@ from pydantic import BaseModel, ValidationError
 
 from jung._async_cleanup import close_awaitable_safely
 from jung.diagnostics import (
-    DiagnosticRecorder,
+    DiagnosticSink,
     _safe_exception_message,
     current_diagnostic_context,
     sanitize_url,
@@ -138,7 +138,7 @@ class OpenAICompatibleLLM:
         *,
         client: AsyncOpenAI | None = None,
         on_provider_attempt: Callable[[ProviderAttemptEvent], None] | None = None,
-        recorder: DiagnosticRecorder | None = None,
+        recorder: DiagnosticSink | None = None,
     ) -> None:
         for task in LLMTask:
             _merge_extra_body(config, task)

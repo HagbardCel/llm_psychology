@@ -102,6 +102,7 @@ async def test_prepare_turn_opening_skips_patch_extraction() -> None:
     plan = await processor.prepare_turn(
         IntakeTurnInput(profile=Profile(name="Alex", primary_language="English"))
     )
+    assert plan.extraction_target is None
     assert plan.record_changed is False
     assert plan.completeness_complete is False
     chunks = [chunk async for chunk in processor.stream_response(plan)]
@@ -147,6 +148,7 @@ async def test_prepare_turn_applies_extraction_and_streams_response() -> None:
         )
     )
     assert plan.record_changed is True
+    assert plan.extraction_target == "presenting_problem"
     assert plan.merged_record.presenting_problem.main_concern.value == "anxiety"
     assert plan.merge_diagnostics is not None
     assert plan.merge_diagnostics.status == "applied"
@@ -226,6 +228,7 @@ async def test_unasked_unknown_is_empty_after_validation() -> None:
     assert diagnostics.retained_evidence_count == 0
     assert diagnostics.dropped_evidence_count == 1
     assert diagnostics.drop_reasons[0]["reason"] == "unasked_noninformative"
+    assert plan.extraction_target == "presenting_problem"
     assert diagnostics.applied is False
 
 

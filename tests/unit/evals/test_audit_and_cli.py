@@ -892,7 +892,7 @@ def test_render_audit_markdown_includes_not_applicable_and_dirty_warning() -> No
             "event_type": "message_failed",
         },
     )
-    assert "Diagnostic capture: COMPLETE" in text
+    assert "diagnostic_capture: COMPLETE" in text
     assert "WARNING: source worktree was dirty" in text
     assert "Style selection: mode=explicit, requested='jung', selected=None" in text
     assert "## Not applicable" in text
@@ -2241,3 +2241,521 @@ def test_artifact_relative_paths_includes_pending_audit_and_run(
     assert "run.json" in paths
     assert "journey.jsonl" in paths
     assert "transcript.md" not in paths
+
+
+def test_immutable_manifest_hashes_trace_and_excludes_mutable_artifacts(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-manifest")
+    runtime = run_dir / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    trace_path = runtime / "trace.jsonl"
+    trace_bytes = b'{"sequence":1,"kind":"llm.call.started","context":{},"data":{}}\n'
+    trace_path.write_bytes(trace_bytes)
+    snapshot = runtime / "db_snapshot.sqlite"
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    write_private_text(run_dir / "transcript.md", "Patient-visible dialogue")
+    manifest_text = "\n".join(audit_mod._immutable_manifest_lines(run_dir))
+    assert "`runtime/trace.jsonl`" in manifest_text
+    assert "`transcript.md`" in manifest_text
+    assert "run.json" not in manifest_text.split("|")[0]
+    assert "journey.jsonl" not in manifest_text.split("SHA-256")[0]
+    expected_size, expected_digest = audit_mod._sha256_file(trace_path)
+    assert f"| {expected_size} | `{expected_digest}` |" in manifest_text
+    trace_path.write_bytes(trace_bytes + b"\n")
+    _, changed_digest = audit_mod._sha256_file(trace_path)
+    assert changed_digest != expected_digest
+
+
+def test_section_f_reviewer_checklist_template_is_immutable() -> None:
+    rendered = render_audit_markdown(
+        status="complete",
+        runtime_diagnostics_status="success",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"scenario_id": "anxiety_sleep"},
+        artifact_index=[],
+    )
+    assert audit_mod._REVIEWER_CHECKLIST_SECTION.strip() in rendered
+    assert "REVIEW_REQUIRED — record answers in PR summary only" in rendered
+
+
+def test_render_audit_excludes_privacy_sentinels_but_allows_patient_visible(
+    tmp_path: Path,
+) -> None:
+    auth_sentinel = "PRIVACY_SENTINEL_AUTH_TOKEN_XYZ"
+    system_sentinel = "PRIVACY_SENTINEL_SYSTEM_PROMPT_ABC"
+    reasoning_sentinel = "PRIVACY_SENTINEL_REASONING_DEF"
+    raw_sentinel = "PRIVACY_SENTINEL_RAW_PROVIDER_GHI"
+    patient_text = "I feel anxious in seminars lately."
+    run_dir = allocate_run_directory(tmp_path / "run-privacy")
+    session_id = str(uuid4())
+    client_message_id = str(uuid4())
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 1, 'user', ?, ?, '2020-01-01T00:00:01Z')
+            """,
+            (str(uuid4()), session_id, patient_text, client_message_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    trace = [
+        {
+            "sequence": 1,
+            "kind": "llm.provider.request",
+            "context": {
+                "session_id": session_id,
+                "client_message_id": client_message_id,
+            },
+            "data": {
+                "task": "intake_patch",
+                "authorization": auth_sentinel,
+                "messages": [
+                    {"role": "system", "content": system_sentinel},
+                    {"role": "user", "content": patient_text},
+                ],
+                "reasoning": reasoning_sentinel,
+                "raw_provider_payload": raw_sentinel,
+            },
+        },
+        {
+            "sequence": 2,
+            "kind": "intake.turn.evaluated",
+            "context": {
+                "session_id": session_id,
+                "client_message_id": client_message_id,
+            },
+            "data": {
+                "extraction_target": "presenting_problem",
+                "raw_evidence_count": 0,
+                "retained_evidence_count": 0,
+                "record_changed": False,
+                "merge_status": "empty_patch",
+            },
+        },
+    ]
+    _write_trace(run_dir, trace)
+    rendered = render_audit_markdown(
+        status="failed",
+        runtime_diagnostics_status="success",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"scenario_id": "anxiety_sleep"},
+        artifact_index=[],
+        trace=trace,
+        run_dir=run_dir,
+    )
+    for sentinel in (
+        auth_sentinel,
+        system_sentinel,
+        reasoning_sentinel,
+        raw_sentinel,
+    ):
+        assert sentinel not in rendered
+    assert patient_text in rendered
+
+
+def test_fallback_audit_on_runtime_complete_never_emits_simulation_completed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-fallback-complete")
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    monkeypatch.setattr(
+        "evals.simulation.runner.run_mechanical_audit",
+        lambda **_kwargs: AuditResult(),
+    )
+
+    def _render_failure(**_kwargs: Any) -> str:
+        raise RuntimeError("simulated render failure")
+
+    monkeypatch.setattr(
+        "evals.simulation.runner.render_audit_markdown",
+        _render_failure,
+    )
+    result = _finalize_run(
+        config=SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+        ),
+        run_dir=run_dir,
+        journey=journey,
+        run_config={
+            "scenario_id": "anxiety_sleep",
+            "patient_model": "test-model",
+            "patient_endpoint": "http://127.0.0.1:8000/v1",
+        },
+        therapy_records=[],
+        progress=SimulationProgress(),
+        provider_trace_required=False,
+        started_at="2020-01-01T00:00:00Z",
+        journey_error=None,
+        error_code=None,
+        error_message=None,
+        api_error=None,
+        patient_extra_body_provenance=None,
+    )
+    assert result.status == "failed"
+    journey_text = (run_dir / "journey.jsonl").read_text(encoding="utf-8")
+    assert "simulation.completed" not in journey_text
+    terminal = [json.loads(line) for line in journey_text.splitlines() if line.strip()][
+        -1
+    ]
+    assert terminal["kind"] == "simulation.failed"
+    assert terminal["data"]["audit_status"] == "FALLBACK"
+    fallback = (run_dir / "audit.md").read_text(encoding="utf-8")
+    assert "audit_status: FALLBACK" in fallback
+
+
+def test_malformed_journey_still_writes_terminal_artifacts(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-bad-journey")
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    # JourneyLog creates an empty file; overwrite with corrupt content so load fails
+    # while append still works for the terminal line.
+    write_private_text(run_dir / "journey.jsonl", "{not-json\n")
+    result = _finalize_run(
+        config=SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+        ),
+        run_dir=run_dir,
+        journey=journey,
+        run_config={
+            "scenario_id": "anxiety_sleep",
+            "patient_model": "test-model",
+            "patient_endpoint": "http://127.0.0.1:8000/v1",
+        },
+        therapy_records=[],
+        progress=SimulationProgress(),
+        provider_trace_required=False,
+        started_at="2020-01-01T00:00:00Z",
+        journey_error=None,
+        error_code=None,
+        error_message=None,
+        api_error=None,
+        patient_extra_body_provenance=None,
+    )
+    assert result.status == "failed"
+    assert (run_dir / "audit.md").is_file()
+    assert (run_dir / "run.json").is_file()
+    audit_text = (run_dir / "audit.md").read_text(encoding="utf-8")
+    assert "journey_log_read_failed" in audit_text
+    assert "patient_metrics_failed" in audit_text
+    run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert "patient_metrics" not in run_payload
+    physical_lines = [
+        line
+        for line in (run_dir / "journey.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    terminal = json.loads(physical_lines[-1])
+    finding_codes = terminal["data"]["finding_codes"]
+    assert "journey_log_read_failed" in finding_codes
+    assert "patient_metrics_failed" in finding_codes
+    assert "chat_journey_cardinality" not in finding_codes
+    assert "missing_assistant_message" not in finding_codes
+
+
+def test_run_mechanical_audit_skips_journey_checks_when_none(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-journey-none")
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+        journey_records=None,
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "chat_journey_cardinality" not in codes
+    na_persistence = [
+        item for item in audit.not_applicable if item.code == "journey_chat_persistence"
+    ]
+    assert na_persistence
+    assert na_persistence[0].evidence.get("reason") == "journey_log_unreadable"
+
+
+def test_format_intake_attempt_detail_renders_unknown_evidence_unions() -> None:
+    from evals.simulation.intake_forensics import UNKNOWN, IntakeAttemptReport
+
+    attempt = IntakeAttemptReport(
+        attempt_index=1,
+        request_id="req",
+        lifecycle_status="present",
+        attempt_outcome="completed",
+        persisted_attempt="unknown",
+        failure_code=None,
+        extraction_target=UNKNOWN,
+        raw_count=UNKNOWN,
+        retained_count=UNKNOWN,
+        merge_status=UNKNOWN,
+        planned_record_changed=UNKNOWN,
+        persisted_record_changed=UNKNOWN,
+        pre_turn_next_item=UNKNOWN,
+        planned_next_item=UNKNOWN,
+        persisted_next_item=UNKNOWN,
+        planned_completeness_complete=UNKNOWN,
+        planned_max_turn_completion_blocked=UNKNOWN,
+        extraction_rows=UNKNOWN,
+        validation_retained_paths=UNKNOWN,
+        persisted_changed_paths=UNKNOWN,
+        materialization_dropped_paths=UNKNOWN,
+        merge_dropped_paths=UNKNOWN,
+        drop_reasons=UNKNOWN,
+        flags=(),
+    )
+    rendered = "\n".join(audit_mod._format_intake_attempt_detail(attempt))
+    assert rendered.count(UNKNOWN) >= 2
+    for char in UNKNOWN:
+        assert rendered.count(char) <= rendered.count(UNKNOWN) * len(UNKNOWN)
+
+    empty_attempt = IntakeAttemptReport(
+        attempt_index=1,
+        request_id="req",
+        lifecycle_status="present",
+        attempt_outcome="completed",
+        persisted_attempt="yes",
+        failure_code=None,
+        extraction_target="presenting_problem",
+        raw_count=0,
+        retained_count=0,
+        merge_status="empty_patch",
+        planned_record_changed=False,
+        persisted_record_changed=False,
+        pre_turn_next_item="duration",
+        planned_next_item="duration",
+        persisted_next_item="duration",
+        planned_completeness_complete=False,
+        planned_max_turn_completion_blocked=False,
+        extraction_rows=(),
+        validation_retained_paths=(),
+        persisted_changed_paths=(),
+        materialization_dropped_paths=(),
+        merge_dropped_paths=(),
+        drop_reasons=(),
+        flags=(),
+    )
+    empty_rendered = "\n".join(audit_mod._format_intake_attempt_detail(empty_attempt))
+    assert UNKNOWN not in empty_rendered
+    assert "| (none) | | | |" in empty_rendered
+    assert "**Drop reasons:**" not in empty_rendered
+
+
+def test_render_audit_evaluated_coverage_defeats_aggregate_count(
+    tmp_path: Path,
+) -> None:
+    client_one = str(uuid4())
+    client_two = str(uuid4())
+    request_one = str(uuid4())
+    request_two = str(uuid4())
+    run_dir = allocate_run_directory(tmp_path / "run-eval-coverage")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    session_id = str(uuid4())
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 1, 'user', ?, ?, '2020-01-01T00:00:01Z')
+            """,
+            (str(uuid4()), session_id, "Turn one", client_one),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 2, 'assistant', ?, ?, '2020-01-01T00:00:02Z')
+            """,
+            (str(uuid4()), session_id, "Reply one", client_one),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 3, 'user', ?, ?, '2020-01-01T00:00:03Z')
+            """,
+            (str(uuid4()), session_id, "Turn two", client_two),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 4, 'assistant', ?, ?, '2020-01-01T00:00:04Z')
+            """,
+            (str(uuid4()), session_id, "Reply two", client_two),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    trace = [
+        {
+            "sequence": 1,
+            "kind": "intake.turn.evaluated",
+            "context": {
+                "client_message_id": client_one,
+                "request_id": request_one,
+            },
+            "data": {"merge_status": "applied", "record_changed": True},
+        },
+        {
+            "sequence": 2,
+            "kind": "intake.turn.evaluated",
+            "context": {
+                "client_message_id": client_one,
+                "request_id": request_one,
+            },
+            "data": {"merge_status": "empty_patch", "record_changed": False},
+        },
+        {
+            "sequence": 3,
+            "kind": "chat.turn.started",
+            "context": {
+                "client_message_id": client_two,
+                "request_id": request_two,
+            },
+            "data": {},
+        },
+        {
+            "sequence": 4,
+            "kind": "chat.turn.completed",
+            "context": {
+                "client_message_id": client_two,
+                "request_id": request_two,
+            },
+            "data": {},
+        },
+    ]
+    rendered = render_audit_markdown(
+        status="complete",
+        runtime_diagnostics_status="success",
+        run_id="run-eval-coverage",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"git_commit": "abc"},
+        artifact_index=[],
+        trace=trace,
+        run_dir=run_dir,
+    )
+    assert "duplicate intake.turn.evaluated" in rendered
+    assert "missing intake.turn.evaluated" in rendered
+    assert "2/2" not in rendered
+
+
+def test_render_audit_legacy_shell_and_none_request_ambiguity(
+    tmp_path: Path,
+) -> None:
+    client_durable = str(uuid4())
+    client_uncommitted = str(uuid4())
+    client_legacy = str(uuid4())
+
+    run_dir = allocate_run_directory(tmp_path / "run-legacy-shell")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    session_id = str(uuid4())
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        for sequence, (text, client_id, role) in enumerate(
+            [
+                ("Durable shell", client_durable, "user"),
+                ("Assistant", client_durable, "assistant"),
+                ("Uncommitted shell", client_uncommitted, "user"),
+                ("Legacy ambiguous", client_legacy, "user"),
+                ("Assistant legacy", client_legacy, "assistant"),
+            ],
+            start=1,
+        ):
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, session_id, sequence, role, content, client_message_id,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, '2020-01-01T00:00:01Z')
+                """,
+                (str(uuid4()), session_id, sequence, role, text, client_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    trace = [
+        {
+            "sequence": 1,
+            "kind": "intake.turn.evaluated",
+            "context": {"client_message_id": client_legacy, "request_id": None},
+            "data": {"merge_status": "applied", "retained_evidence_count": 1},
+        },
+        {
+            "sequence": 2,
+            "kind": "intake.turn.evaluated",
+            "context": {"client_message_id": client_legacy, "request_id": None},
+            "data": {"merge_status": "empty_patch", "retained_evidence_count": 0},
+        },
+        {
+            "sequence": 3,
+            "kind": "chat.turn.completed",
+            "context": {"client_message_id": client_legacy, "request_id": None},
+            "data": {},
+        },
+    ]
+    rendered = render_audit_markdown(
+        status="complete",
+        runtime_diagnostics_status="success",
+        run_id="run-legacy-shell",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"git_commit": "abc"},
+        artifact_index=[],
+        trace=trace,
+        run_dir=run_dir,
+    )
+    assert "evaluated_coverage_unknown_legacy_shell" in rendered
+    assert "legacy intake.turn.evaluated attribution ambiguity" in rendered
+    assert rendered.count("evaluated_coverage_unknown_legacy_shell") == 1
+    assert "retained_count: 1" not in rendered.split("Legacy ambiguous")[1]

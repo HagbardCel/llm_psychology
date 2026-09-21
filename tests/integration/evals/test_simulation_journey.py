@@ -259,6 +259,14 @@ async def test_simulation_success_journey(
         encoding="utf-8"
     )
     assert (run_dir / "runtime" / "trace.jsonl").is_file()
+    trace_events = [
+        json.loads(line)
+        for line in (run_dir / "runtime" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert any(e["kind"] == "intake.turn.evaluated" for e in trace_events)
     assert (run_dir / "runtime" / "db_snapshot.sqlite").is_file()
     assert (run_dir / "checkpoints" / "initial-ready.sqlite").is_file()
     assert (run_dir / "checkpoints" / "after-session-001.sqlite").is_file()

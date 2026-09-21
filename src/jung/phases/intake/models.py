@@ -230,6 +230,7 @@ class IntakeTurnPlan(BaseModel):
     merged_record: IntakeRecord
     record_changed: bool
     completeness_complete: bool
+    extraction_target: str | None = None
     next_required_item: str | None = None
     max_turn_completion_blocked: bool = False
     merge_diagnostics: IntakeMergeDiagnostics | None = None

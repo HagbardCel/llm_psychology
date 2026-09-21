@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -312,6 +312,14 @@ def snapshot_database(source: Path, destination: Path) -> None:
             except OSError:
                 pass
         raise
+
+
+class DiagnosticSink(Protocol):
+    """Minimal recorder surface used by LLM adapters and gateways."""
+
+    def next_id(self, prefix: str) -> str: ...
+
+    def record(self, kind: str, data: Mapping[str, Any] | None = None) -> None: ...
 
 
 class DiagnosticRecorder:

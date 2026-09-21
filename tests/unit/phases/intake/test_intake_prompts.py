@@ -17,7 +17,7 @@ from jung.phases.transcript import TranscriptTurn
 
 
 def test_patch_extraction_uses_negative_ownership_boundary() -> None:
-    assert PROMPT_VERSION == "intake-v3"
+    assert PROMPT_VERSION == "intake-v4"
     user_turn = TranscriptTurn(
         message_id=uuid4(),
         sequence=1,
@@ -38,6 +38,27 @@ def test_patch_extraction_uses_negative_ownership_boundary() -> None:
     assert (
         "Do not invent provenance, source identifiers, or direct-ask flags." in joined
     )
+
+
+def test_patch_extraction_includes_category_c_safety_guidance() -> None:
+    user_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=2,
+        role="user",
+        content="I am not thinking about harming myself or anyone else.",
+    )
+    messages = build_patch_extraction_messages(
+        record=IntakeRecord(),
+        latest_user_message=user_turn,
+        previous_assistant_message="Are you having thoughts of harming yourself or others?",
+        prompted_item="risk_screen",
+    )
+    joined = "\n".join(message.content for message in messages)
+    assert "Prompted item: risk_screen" in joined
+    assert "response_status informative" in joined
+    assert "risk_screen" in joined
+    assert "presenting_problem.main_concern" in joined
+    assert "source_role=" not in joined
 
 
 def test_opening_targets_presenting_problem() -> None:
