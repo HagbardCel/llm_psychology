@@ -189,7 +189,7 @@ These are responsibility budgets, not invented line-count forecasts. At each int
 | R0a | Minimal schema, development fixtures/confirmation requirements, rubric, designated runtime | No redundant review fields, purpose labels, prior-note context, or confirmation fixtures exposed during tuning | None |
 | R1 | Finite attempts/output/deadlines, explicit failure and credentials | Unlimited/truncated success; defer broad settings/evidence rewrites | None |
 | R0b | Final admission using R1 and canonical serializer | No architecture gate on optional runtimes | None |
-| R2a–R2e | Unified review, session work, preference/finish semantics, fixed source bound | Main's extraction/assessment/two-pass owners, operations, SETUP; defer self-report and recall metadata | No new runtime dependency |
+| R2a–R2e | Unified review, session work, method/language and finish semantics, fixed source bound | Main's extraction/assessment/two-pass owners, operations, SETUP; defer self-report and recall metadata | No new runtime dependency |
 | R3 | Small direct evidence for surviving hard claims | Residual trace reconstruction, merge replay, intermediate matrices | None |
 | R4 | Safe logs, opt-in payload capture, explicit export | Recorder lifecycle/schema, wrapper gateway, automatic snapshots | Stdlib; reuse redaction |
 | R5 | EndpointProfile and CallPolicy; admitted public SDK parsing | Six-task settings, unneeded structured modes/schema walks; no TOML | Existing SDK/Pydantic/settings |
@@ -209,7 +209,7 @@ Measure reduction from main; do not count Phase-10-only files as deleted or carr
 - [ ] Free-text intake starts with editable defaults and can finish with uncertainty. Finish Intake fixes the method for all later therapy, including initial-review failure/retry. Therapy language freezes at creation; later language edits and closed review retries remain stable. No method projection or transition-specific replacement rule remains.
 - [ ] Profile is the sole method owner; sessions store scalar language only. No generic preference snapshots, session method copies, or stored/derived plan-method property remain.
 - [ ] One normal text call and one bounded review plus at most one correction; physical attempts, terminal handling, and total deadlines tested.
-- [ ] Patient wording/preferences and generated interpretation have distinct owners; corrections preserve history. No typed self-report requirement or duplicated stored review-to-plan link.
+- [ ] Patient wording, explicit method/language settings, and generated interpretation have distinct owners; corrections preserve history. No display-name field without a target consumer, typed self-report requirement, or duplicated stored review-to-plan link.
 - [ ] One canonical serialization drives byte accounting and the full review source block; mandatory sources fit; warning/rejection preserves drafts; any retry endpoint fits the fixed envelope.
 - [ ] Failed/cancelled/retried work cannot create partial plans, duplicate relationships, or false stream completion; recovery has one owner and attempt fencing.
 - [ ] Ordinary logs exclude payloads and are never correctness dependencies; exact capture/export is explicit and private.
@@ -259,19 +259,11 @@ Fresh `make check` on the **editing checkout**, not main, passed formatting, lin
 
 Consistency review covered main-based inventories, B0/R0a/R1/R0b dependencies, the R2 stack, canonical source serialization, preference freezing, removed draft/persistence fields, and the R6-only recall contract/reset implications. Live-model admission was **not run** for this documentation task. No prior evidence is promoted into proof of the proposed reviewer or fixed envelope.
 
-### PR #77 head before this revision — 2026-09-21
-
-At `93fb6ffc399be9973e8b38cc610eb89c2bfd20ce`, the [GitHub Release Gate](https://github.com/HagbardCel/llm_psychology/actions/runs/35569366325) passed on 2026-09-21: **960 unit/integration tests** and **3 console E2E tests**. The log confirms one existing unawaited `run_local` coroutine warning. These are the main-based PR's counts, distinct from the historical **1,037-test Phase-10 editing checkout** records above. This CI run predates the review refinements below and does not validate model admission.
-
 ### PR #77 review refinements — 2026-09-21
 
-Revised six planning documents on `docs/architecture-plan` above `93fb6ffc39`: explicit green intermediate R2 boundaries and temporary persistence retention, development/withheld confirmation admission, deterministic prior-method plan projection, and focused full-plan preservation cases. Clarified schema increments and verified the preceding CI record against its log. Runtime code, canonical implementation docs, and product databases were unchanged.
+Revised six planning documents on `docs/architecture-plan` above `93fb6ffc39`: explicit green intermediate R2 boundaries and temporary persistence retention, development/withheld confirmation admission, deterministic prior-method plan projection, and focused full-plan preservation cases. Clarified schema increments and verified that revision's CI record against its log. Runtime code, canonical implementation docs, and product databases were unchanged.
 
 Fresh local `make check` passed: formatting/lint/documentation checks, **960 unit/integration tests**, and **3 console E2E tests**. The existing unawaited `run_local` coroutine warning recurred once; B0 still owns its separate fix. `make docs-links`, the plan-specific `md-link-checker==1.10 --no-urls architecture-plan/*.md` check, and `git diff --check` passed. Live model evaluation was **not run**; R0b remains pending. Document review checked the stack's caller/deletion boundaries, confirmation reuse rules, method-specific prompt inputs, and consistency across the acceptance criteria.
-
-### CI for the reviewed refinement head — 2026-09-21
-
-At `8e81149512f3950b65059b37dccf835b8133a8dd`, [GitHub Release Gate](https://github.com/HagbardCel/llm_psychology/actions/runs/35572511749) passed on 2026-09-21: **960 unit/integration tests** and **3 console E2E tests**, with the one known unawaited `run_local` coroutine warning. Verified against the run log. This validates the preceding review-refinement commit on the main-based branch; it supersedes the older CI snapshot for that revision, not the still-pending live admission gate. The scope reduction below is a subsequent document revision.
 
 ### Scope reduction and operational confirmation procedure — 2026-09-21
 
@@ -279,12 +271,12 @@ Revised six planning documents above `8e81149512`: freeze method at Finish Intak
 
 Fresh local `make check` passed formatting/lint/documentation checks, **960 unit/integration tests**, and **3 console E2E tests**. The known unawaited `run_local` coroutine warning recurred once and remains B0 work. `make docs-links`, the plan-specific `md-link-checker==1.10 --no-urls architecture-plan/*.md` check, and `git diff --check` passed. Reviewed method-freeze/error semantics, optional-feature dependencies, confirmation isolation, and source/persistence ownership across all target documents. No runtime code, canonical implementation docs, or product database changed. Live model evaluation was **not run**; R0b remains pending.
 
-### CI for the scope-reduction head — 2026-09-21
-
-At `afdaa2011f93e47c9a4fb2b608cbb72400393d7d`, [GitHub Release Gate](https://github.com/HagbardCel/llm_psychology/actions/runs/35577176652) passed on 2026-09-21: **960 unit/integration tests** and **3 console E2E tests**, with the one known unawaited `run_local` coroutine warning. Verified against the run log. This validates the scope-reduction commit itself; the sole-method-owner/dependency refinements below are a subsequent document change. Model admission remains pending.
-
 ### Sole method owner and independent continuity measurement — 2026-09-21
 
 Revised six planning documents above `afdaa2011f93`: `profile.method` is the sole durable method owner, sessions preserve only scalar language, and plan-method provenance is removed. R6 baseline measurement depends on complete R2 rather than R5; R7 joins R5 cleanup and applicable R6 evidence. Final frozen development cases must all pass before confirmation construction/opening. Historical validation entries describe earlier plan versions and do not reinstate removed requirements.
 
 Fresh local `make check` passed formatting/lint/documentation checks, **960 unit/integration tests**, and **3 console E2E tests**. The known unawaited `run_local` coroutine warning recurred once and remains assigned to B0. `make docs-links`, the plan-specific `md-link-checker==1.10 --no-urls architecture-plan/*.md` check, and `git diff --check` passed. Reviewed ownership, intake/language freeze boundaries, confirmation ordering, independent R6 dependencies, and the R7 join across target documents. No runtime code, canonical implementation docs, or product database changed. Live model evaluation was **not run**; R0b remains pending.
+
+### Latest verified CI before final cleanup — 2026-09-21
+
+At `ce62dfda76f93dbf3be3b513bc8e2c83d49e9aa0`, [GitHub Release Gate](https://github.com/HagbardCel/llm_psychology/actions/runs/35616166426) passed on 2026-09-21: **960 unit/integration tests** and **3 console E2E tests**, with the one known unawaited `run_local` coroutine warning. Verified against the run log. These are the main-based PR's counts, distinct from the historical **1,037-test Phase-10 editing checkout** records above. Repeated CI-only entries are consolidated here; prior revisions remain in Git/PR history. This validates the sole-owner/dependency revision, not the still-pending model admission. Subsequent final-cleanup CI belongs in the PR checks, without another documentation commit solely to record its own CI.

@@ -30,9 +30,9 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Keep the requirement?** Keep user choice and a meaningful style effect. Drop generated ranking and frozen lifetime selection.
 
-**Alternatives:** generate only a recommendation and then a selected plan (two calls); generate a style-neutral plan then adapt live; choose preference before assessment and generate one plan.
+**Alternatives:** generate only a recommendation and then a selected plan (two calls); generate a style-neutral plan then adapt live; choose method before assessment and generate one plan.
 
-**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Idle preference edits apply to subsequent intake replies; Finish Intake freezes the method for all later therapy and the final intake preferences for initial planning. Language remains editable, with therapy language frozen per session. No separate SETUP gate, post-intake method switching, or unsupported claim that one packaged method is clinically best.
+**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Idle method/language edits apply to subsequent intake replies; Finish Intake freezes the method for all later therapy and the intake language for initial planning. Language remains editable, with therapy language frozen per session. No separate SETUP gate, post-intake method switching, or unsupported claim that one packaged method is clinically best.
 
 ### P3. The second retrospective call has a costly authority boundary
 
@@ -240,9 +240,9 @@ One canonical `serialize_review_session_source` function owns the source block u
 
 **Revisit when:** the resulting two-task configuration demonstrates a concrete usability problem that a file would solve. Remove responsibilities before choosing new configuration machinery.
 
-### D11. Preferences are metadata, not a SETUP stage
+### D11. Method and language are settings, not a SETUP stage
 
-**Choice and why:** initialize profile and intake together with visible English/supportive defaults; display name is optional. The profile alone owns `method`, editable during intake and immutable after Finish Intake, including failed initial review/retry. Each session stores scalar `language`: editable with the profile default during intake, frozen at closure for initial review, and frozen at creation for therapy. Later profile language edits apply to future sessions. Reviews/retries read immutable profile method plus session language; no generic preference snapshot or plan-method provenance rule remains. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
+**Choice and why:** initialize profile and intake together with visible English/supportive defaults. Omit display name because no target prompt or console personalization consumer requires it. The profile alone owns `method`, editable during intake and immutable after Finish Intake, including failed initial review/retry. Each session stores scalar `language`: editable with the profile default during intake, frozen at closure for initial review, and frozen at creation for therapy. Later profile language edits apply to future sessions. Reviews/retries read immutable profile method plus session language; no generic preference snapshot or plan-method provenance rule remains. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
 
 **Trade-off:** the default language/method is a product default, not an explicit patient choice or clinical recommendation. The console must show defaults, explain that Finish Intake fixes the method, and distinguish pending language edits. Method switching adds a new product feature and transition semantics for both plan and handoff; field projection cannot ensure method-neutral prose. Defer it, including any method revision/provenance model, to a demonstrated need. Only language needs a session-specific value for stable retry behavior. Reinstate a setup gate only for a demonstrated requirement that cannot be met through editable metadata.
 

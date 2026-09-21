@@ -53,7 +53,7 @@ Do not reorganize unaffected API/client files simply to match this picture. A se
 
 ## Workflow state and concurrency
 
-Four displayed stages are enough: **INTAKE, REVIEW, READY, THERAPY**. Review has pending/running/failed status, shown alongside the stage. It is not a second mutable stage field. Preferences do not require a SETUP stage.
+Four displayed stages are enough: **INTAKE, REVIEW, READY, THERAPY**. Review has pending/running/failed status, shown alongside the stage. It is not a second mutable stage field. Method and language settings do not require a SETUP stage.
 
 Derivation order:
 
@@ -62,7 +62,7 @@ Derivation order:
 3. An applied current plan and no unfinished work → `READY`.
 4. Any other combination → an invariant error, not a default stage.
 
-Fresh-database initialization atomically creates the singleton profile and one intake session with English and a small supportive-style entry as defaults. Display those editable defaults without implying that the patient explicitly chose them. Display name is optional. Initialization is idempotent and never manufactures a new intake to hide an inconsistent existing database. Date of birth and free-form profile notes are removed from this minimal target because they have no demonstrated use in the current live prompt path. Patient narrative belongs in messages. These omissions are a product scope choice, not a prohibition on later age-appropriate requirements.
+Fresh-database initialization atomically creates the singleton profile and one intake session with English and a small supportive-style entry as defaults. Display those editable defaults without implying that the patient explicitly chose them. Initialization is idempotent and never manufactures a new intake to hide an inconsistent existing database. Display name, date of birth, and free-form profile notes are removed from this minimal target because they have no demonstrated target consumer; no console name-personalization feature is required. Patient narrative belongs in messages. These omissions are a product scope choice, not a prohibition on later age-appropriate requirements.
 
 Keep the mutation lock around command acceptance/commit, and a generation reservation across a chat attempt. One review task runs while the stage is `REVIEW`; another session cannot begin against an unfinished review. Reads remain available. Never hold a SQLite transaction across a model await.
 
@@ -70,21 +70,21 @@ The backend also takes an OS advisory lock for the configured data directory at 
 
 | Stage | Commands |
 |---|---|
-| INTAKE | Chat; finish intake after at least one nonblank patient message; edit preferences while idle |
+| INTAKE | Chat; finish intake after at least one nonblank patient message; edit method/language while idle |
 | REVIEW | Read state/history; retry a failed or unscheduled review when idle; stop the application |
-| READY | Start therapy; edit language/display name; method remains fixed |
-| THERAPY | Chat; end session; edit language/display name only between turns; method remains fixed |
+| READY | Start therapy; edit language; method remains fixed |
+| THERAPY | Chat; end session; edit language only between turns, effective for future sessions; method remains fixed |
 
 The profile is the sole durable owner of `method`; each session stores only a scalar `language`, not `preferences_json` or a method copy. During intake, idle method edits update the profile; language edits atomically update `profile.current_language` and the open intake's `language`. They affect subsequent replies without rewriting past messages. Finish Intake closes intake and queues review in one transaction, making the profile method immutable and freezing intake language. An edit racing with closure is serialized by normal command ownership. Reject method changes after closure, including while initial review is pending or failed; do not silently accept or queue them. The closed intake establishes this invariant without another lock flag or SETUP stage.
 
 All therapy conversations and reviews obtain the same immutable `profile.method` and their session's `language`, alongside the applicable plan and latest useful handoff. No method-mismatch projection, pending method change, transition-specific replacement rule, or pre-session planning call is needed. Method is not a plan property, stored or derived through its source session. Switching method is a deferred product feature that would need its own revision/provenance semantics and transition design for both plan and handoff.
 
-Language and display name remain editable while idle. At therapy session creation, copy `profile.current_language` into `sessions.language` and freeze that scalar; later profile language edits are visibly pending for future sessions. Review retries use the session language and immutable profile method, so a generic preference snapshot is unnecessary. Display-name edits do not rewrite history. Merely editing presentation preferences or opening an empty session does not generate a plan; deterministic no-conversation review remains no-change.
+Language remains editable while idle. At therapy session creation, copy `profile.current_language` into `sessions.language` and freeze that scalar; later profile language edits are visibly pending for future sessions. Review retries use the session language and immutable profile method, so a generic preference snapshot is unnecessary. Merely editing language or opening an empty session does not generate a plan; deterministic no-conversation review remains no-change.
 
 ## Intake
 
 1. Console displays the initialized language/style defaults and a short orientation: concerns, impact/time course, goals, coping, and safety can be discussed; unknowns and declining to answer are acceptable.
-2. Intake already exists with editable preferences and no initial plan. A static welcome invites the first patient contribution; it is UI guidance, not fabricated therapist dialogue. No explicit preference confirmation is required to begin.
+2. Intake already exists with editable method/language and no initial plan. A static welcome invites the first patient contribution; it is UI guidance, not fabricated therapist dialogue. No explicit method/language confirmation is required to begin.
 3. Patient text uses the ordinary durable chat path. The conversation task in intake mode asks concise follow-ups based on the recent transcript. There is no extraction call and no durable inferred intake record.
 4. Keep an always-available explicit help action. Safety disclosures and denials use ordinary free text and remain complete message sources. Typed self-report controls are deferred until an independent product requirement justifies them; no extraction replacement or structured safety fields are part of R2.
 5. **Finish intake** is an explicit user command. It does not certify clinical completeness or safety. Accept it after one patient message, even if questions remain. It freezes the profile method and intake session language, closes the session, and queues review in one transaction. A trailing unanswered message remains source material for that review.

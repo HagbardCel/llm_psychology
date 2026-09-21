@@ -58,7 +58,7 @@ Remove the automatic shutdown SQLite backup. Add/retain a small explicit diagnos
 5. Reproduce with synthetic or deliberately authorized data and full capture only when metadata is insufficient.
 6. If an experiment promised exact evidence, inspect its direct request/result/state artifact and completeness flag. Missing evidence is a failed claim, not a reason to infer success from logs.
 
-Ordinary logs plus current product state cannot reproduce every historical prompt after preference changes, code upgrades, or retention rotation. This is an explicit limit. Small artifact provenance identifies the generator; opt-in capture establishes exact inputs when required.
+Ordinary logs plus current product state cannot reproduce every historical prompt after intake method/language edits, code upgrades, or retention rotation. This is an explicit limit. Small artifact provenance identifies the generator; opt-in capture establishes exact inputs when required.
 
 ## Safety and sensitive data
 
@@ -113,7 +113,7 @@ Keep one exhaustive owner for each invariant, plus a few cross-boundary examples
 - Application integration: identical retry, disconnect-before/after commit, interrupted review recovery, scheduling failure, new-session blocking; only optional R6a adds recall-metadata conflicts and validation.
 - Adapter unit/HTTP mock: exact physical attempts, total deadlines including correction, length/refusal/EOF/blank handling, stream close, credentials, actual serialized schema/options.
 - Context unit/store integration: identical canonical source serialization for accounting/review, multilingual/escaping/many-short-turn boundaries, retries count once, mandatory sources, contiguous exchanges, temporal labels, no older review notes, and chronology-only candidate ordering. R6's 100-session fixture runs after R2 independently of R3–R5, separates mandatory-source inclusion from unanchored misses, and measures bounded queries/serialization. Later changes rerun only invalidated evidence. Only optional R6a adds recall metadata and revalidates the envelope.
-- API/console: default intake, idle preference edits until closure, atomic profile-method freeze/edit races, rejection of later method changes including failed initial review, scalar session language unaffected by later profile language edits, interrupted stream/retry, basic inspection, capacity warning/draft preservation. Conversation/review read the method from the profile, without a session or plan copy. Complete browsing/selection/recall behavior is tested only if optional R6a is justified and implemented.
+- API/console: default intake, idle method/language edits until closure, atomic profile-method freeze/edit races, rejection of later method changes including failed initial review, scalar session language unaffected by later profile language edits, interrupted stream/retry, basic inspection, capacity warning/draft preservation. Conversation/review read the method from the profile, without a session or plan copy. Complete browsing/selection/recall behavior is tested only if optional R6a is justified and implemented.
 - Eval harness: fixture isolation, patient information boundary, nonzero failure outcome, cancellation/capture failure, and no evidence-success on missing files.
 
 Prefer behavioral assertions over snapshots of whole prompts, private helper names, or every diagnostic log field. Preserve import-boundary tests that enforce real ownership; remove filename freezes when modules change.
