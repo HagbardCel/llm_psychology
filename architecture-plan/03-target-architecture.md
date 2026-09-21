@@ -75,19 +75,21 @@ The backend also takes an OS advisory lock for the configured data directory at 
 | READY | Start therapy; edit preferences |
 | THERAPY | Chat; end session; edit preferences only between turns |
 
-Create each session with a small `preferences_json` snapshot. Before its first accepted patient message, idle profile language/style edits update that snapshot atomically. The first accepted message freezes the snapshot, including when its assistant response fails; no separate setup/submitted flag is needed. Later preference edits affect future sessions and their reviews, not the active session or an in-flight request. Show those edits as pending. Plans record the method under which they were authored. When a new session chooses another method, the conversation receives that method's instructions and the earlier plan as explicitly labeled prior strategy; it does not have to apply incompatible old techniques. Its review must produce an updated plan for the new method. No extra preference-transition workflow is needed.
+Create each session with a small `preferences_json` snapshot. During intake, idle language/style edits update profile and session preferences atomically and affect subsequent replies without rewriting past messages. Finish Intake freezes the final snapshot in the transaction that closes intake and queues review. An edit racing with closure is serialized by normal command ownership; once closed, review and retry use the frozen preferences. During therapy, preferences freeze at session creation; later profile edits are visibly pending for future sessions. No separate setup/submitted flag is needed.
+
+Plans record their authoring method. When a new therapy session uses another method, it receives that method's instructions and the earlier plan as labeled prior strategy, without applying incompatible old techniques. Its review must produce an updated plan for the new method. The deterministic no-conversation path remains no-change; merely editing preferences or opening an empty session does not generate a plan.
 
 ## Intake
 
 1. Console displays the initialized language/style defaults and a short orientation: concerns, impact/time course, goals, coping, and safety can be discussed; unknowns and declining to answer are acceptable.
 2. Intake already exists with editable preferences and no initial plan. A static welcome invites the first patient contribution; it is UI guidance, not fabricated therapist dialogue. No explicit preference confirmation is required to begin.
 3. Patient text uses the ordinary durable chat path. The conversation task in intake mode asks concise follow-ups based on the recent transcript. There is no extraction call and no durable inferred intake record.
-4. Keep an always-available help action. Optional direct self-report controls let the user explicitly submit `self_harm`, `harm_to_others`, or `medical_urgency` with `yes/no/unsure/decline` and optional text. These are user input, never automatic classification of free text. Their exact submitted values and wording are stored with their message. A `no` for one dimension says nothing about another.
-5. **Finish intake** is an explicit user command. It does not certify clinical completeness or safety. Accept it after one patient message, even if questions remain. It closes the session and queues its review in one transaction. A trailing unanswered message remains source material for that review.
+4. Keep an always-available explicit help action. Safety disclosures and denials use ordinary free text and remain complete message sources. Typed self-report controls are deferred until an independent product requirement justifies them; no extraction replacement or structured safety fields are part of R2.
+5. **Finish intake** is an explicit user command. It does not certify clinical completeness or safety. Accept it after one patient message, even if questions remain. It freezes the final preferences, closes the session, and queues review in one transaction. A trailing unanswered message remains source material for that review.
 6. The initial review reads the full intake and produces a provisional plan and handoff. It records unknowns and questions for later clarification. A valid initial review requires a plan; it does not require a diagnosis or style score.
 7. Commit and enter `READY`. No assessment operation, catalog coverage validator, or post-assessment style-selection stage remains.
 
-The direct self-report API is small: an optional typed `self_report` field on chat input, allowed for current intake/therapy sessions. Its identity and text are part of idempotency comparison. Store source metadata on the message; do not create another clinical assessment table. Console controls submit the explicit selected value, rather than converting arbitrary natural language into that value. Free text alone remains fully supported. This does not require a form framework.
+R2 keeps chat input to session, client message identity, and text. Exact denial retention, actual review selection, and inclusion in the next context have distinct checks; storing raw text alone does not establish semantic continuity. R6 later adds explicit recall metadata together with browsing, selection, persistence, and idempotency support.
 
 ## Live therapy
 
@@ -97,7 +99,7 @@ sequenceDiagram
     participant A as Application
     participant D as SQLite
     participant L as Conversation model
-    U->>A: Chat(session, client message ID, text, optional self-report)
+    U->>A: Chat(session, client message ID, text)
     A->>D: Resolve duplicate; check live context and fixed session-source limit
     A->>D: Commit patient message
     A->>A: Select and budget context from consistent source reads
@@ -108,7 +110,7 @@ sequenceDiagram
     A-->>U: message_completed
 ```
 
-Same-ID retries reuse or regenerate the same accepted user message; changed content or self-report metadata is a conflict. A partial stream is not a completed therapeutic record. If the provider ends with truncation, missing terminal status, refusal/filter failure, or blank text, no assistant completion is committed. The console marks any displayed partial as interrupted and offers retry/end; it must not leave it looking like a successful answer.
+Same-ID retries reuse or regenerate the same accepted user message; changed content is a conflict. R6 extends that equality to explicit recall metadata when introduced. A partial stream is not a completed therapeutic record. If the provider ends with truncation, missing terminal status, refusal/filter failure, or blank text, no assistant completion is committed. The console marks any displayed partial as interrupted and offers retry/end; it must not leave it looking like a successful answer.
 
 Retain the existing four NDJSON event shapes unless a specific UI need requires a change. Cancellation closes the SDK stream and drains critical database work before releasing mutation ownership. If cancellation occurs after commit but before the terminal event arrives, the client reconciles through history. There is no exactly-once-delivery claim over HTTP; there is idempotent durable acceptance/completion.
 
@@ -116,16 +118,16 @@ Retain the existing four NDJSON event shapes unless a specific UI need requires 
 
 Ending a therapy session atomically sets `ended_at` and review status `pending`. The response is immediately accepted; review outlives the HTTP request. Starting another session waits for successful review, preserving coherent plan/handoff ownership.
 
-Review input contains the full completed session, starting plan, session preferences, latest useful prior handoff, and a small dated source selection. Historical interpretation is labeled as such. The same processor handles initial intake and later therapy, with explicit initial-plan requirements.
+Review input contains the full completed session, starting plan, session preferences, latest useful prior handoff, and a small dated patient-source selection. The plan/handoff are labeled generated guidance; earlier review notes are excluded initially to limit repeated interpretation. The same processor handles initial intake and later therapy, with explicit initial-plan requirements.
 
 Output sections are:
 
-- **Session note:** short account of the current session, a few supported observations/hypotheses, uncertainty, significant moments, safety/boundary observations, and unresolved questions.
-- **Handoff:** opening direction, limited carry-forward questions, things to avoid, and a few source handles whose exact wording matters next time.
-- **Memory selections:** source handles for patient statements worth retaining as retrieval candidates, with a small selection-purpose label.
+- **Session note:** short account, supported observations/hypotheses or uncertainty, and safety/boundary observations. No separate unresolved-question list.
+- **Handoff:** opening direction, limited carry-forward questions/directions (including session-specific restrictions), and a few source handles. Enduring restrictions belong in plan cautions; no separate avoid list.
+- **Memory selections:** up to five patient source handles, without purpose labels or purpose-based priority.
 - **Replacement plan or null:** full bounded strategy when change is warranted. No sparse patch language.
 
-Validate fields, references, visible-source membership, source roles/session membership, and plan requirements separately. Current/historical labels come from resolved sources, not a model-authored scope field. Then one transaction writes the review, selected references, optional new plan/current pointer, and review completion. Application code resolves prompt-local handles to real IDs and authors provenance. No intermediate generated analysis is called source truth. The compact schema and one-call decision must pass R0 before this production cutover is implemented.
+Validate fields, references, visible-source membership, source roles/session membership, and plan requirements separately. Current/historical labels come from resolved sources, not a model-authored scope field. Then one transaction writes review, references, optional plan/current pointer, and completion. The plan row owns its source-review link; review JSON stores no reverse resulting-plan ID. Application code resolves handles and authors provenance. The compact schema and one-call decision must pass R0b on R1's boundary before cutover.
 
 Empty therapy sessions take a deterministic no-change path. Therapy with only an unanswered patient contribution also takes a deterministic review indicating that it was not explored; its source is retained and presented at the next session. Do not infer disengagement. Intake with patient text still needs the initial review even if no assistant completed, because it must establish a provisional plan. Empty intake cannot finish.
 
@@ -168,7 +170,7 @@ Default review profile is the **same profile object** as conversation. One HTTP 
 
 Retain one `load_settings()` owner using existing `pydantic-settings` and `.env`. Environment values override dotenv values, which override defaults. Do not introduce TOML, secret-name indirection, or another configuration parser. Once six tasks have become two, R5 removes obsolete task overrides and reduces settings to the endpoint/call-policy fields that still have consumers. Cross-origin credential isolation is an earlier R1 correctness fix, not dependent on this redesign. Unknown endpoint/policy keys fail validation.
 
-Initial engineering defaults to test in R0 are 768 completion tokens / 120 seconds for conversation and 3,072 completion tokens / 300 seconds for review; they are not promises about all local models. Bound every output and reserve reasoning within the provider's total completion budget. Also enforce a finite response-byte limit (initially 8 KiB for conversation), so acceptance can reserve an actual maximum assistant source size within the fixed product envelope. Exceeding it interrupts the attempt without a completed assistant row. If a server distinguishes visible-output and total-output limits, its endpoint profile must name the supported behavior; do not assume all APIs share it. R0 freezes suitable limits before cutover, including the session-source maximum and bounded non-session review allowance.
+Initial engineering defaults to test in R0b are 768 completion tokens / 120 seconds for conversation and 3,072 completion tokens / 300 seconds for review; they are not promises about all local models. Bound every output and reserve reasoning within the provider's total completion budget. Also enforce a finite response-byte limit (initially 8 KiB for conversation), so acceptance can reserve a maximum assistant source size using the same canonical source serializer as review. Exceeding it interrupts the attempt without a completed assistant row. If a server distinguishes visible-output and total-output limits, its endpoint profile must name the supported behavior. R0b freezes suitable limits on the corrected R1 boundary, including the session-source maximum and bounded non-session allowance.
 
 ### Runtime-specific guidance
 
@@ -184,7 +186,7 @@ One resident model is the operational baseline. If two models do not fit comfort
 
 Natural text is right for conversation: no JSON wrapper, action parser, or model-authored stage transition. Review needs structure because references and plan changes become durable data.
 
-Target `json_schema` as the sole production review mode if R0 admits both intended llama.cpp and MTPLX configurations with the actual compact schema. Any alternative mode requires a named required endpoint and measured need, with explicit schema instructions and the same validation; it is not retained for hypothetical compatibility or used as an automatic downgrade. R5 separately tests the SDK's public Pydantic parse path to remove bespoke schema processing. Structure is not truth. Parse a complete JSON object; do not adopt partial JSON recovery or infer missing fields. Pydantic provides strict JSON validation, while also offering partial parsing facilities that this commit boundary deliberately does not use. [Pydantic JSON documentation](https://pydantic.dev/docs/validation/latest/concepts/json/)
+Target `json_schema` as the sole production review mode. R0a designates one required local runtime before final tests; R0b admits its actual model/server/configuration with the compact schema on R1's corrected boundary. Additional llama.cpp, MTPLX, or other configurations need separate admission before support is advertised, but do not block canonical cutover. Their incompatibility does not automatically add another mode. Any exception requires a named required endpoint and measured need; no automatic downgrade. R5 separately admits public SDK parsing and revalidates affected properties. Structure is not truth. Parse a complete JSON object; do not infer missing fields or use partial recovery. [Pydantic JSON documentation](https://pydantic.dev/docs/validation/latest/concepts/json/)
 
 One logical review call:
 

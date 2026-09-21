@@ -18,7 +18,7 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Simpler alternatives:** a patient-completed questionnaire; free intake conversation with explicit completion; a much smaller extractor which only recommends the next question. The last option still puts extraction latency and failure in the live path.
 
-**Direction:** conversational intake with an explicit **finish intake** command, a short displayed orientation checklist, and direct self-report controls when typed answers are useful. Retain raw wording. Review identifies unknowns and proposes clarification; it does not turn unknowns into a gate. No minimum beyond a nonblank patient contribution, no maximum-turn completion heuristic, and no inference-based readiness label.
+**Direction:** free-text intake with an explicit **finish intake** command and a short displayed orientation checklist. Retain complete wording; review selects whole sources and identifies unknowns without making them a gate. Defer typed self-report controls until an independent product requirement justifies their API/storage/UI cost. No minimum beyond a nonblank patient contribution, maximum-turn completion heuristic, or inferred readiness label.
 
 ### P2. Assessment generates alternatives the application never uses
 
@@ -32,7 +32,7 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 **Alternatives:** generate only a recommendation and then a selected plan (two calls); generate a style-neutral plan then adapt live; choose preference before assessment and generate one plan.
 
-**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Preference edits before the first accepted message update intake's snapshot; later edits apply to future sessions and their reviews. Review produces one plan for its session's method. No separate SETUP gate, automatic style switching, or unsupported claim that one packaged method is clinically best.
+**Direction:** start intake with visible English/supportive defaults and plain style descriptions. Idle preference edits apply to subsequent intake replies; Finish Intake freezes the final preferences for initial planning. Therapy preferences freeze at session creation, with later edits pending for future sessions. No separate SETUP gate, automatic style switching, or unsupported claim that one packaged method is clinically best.
 
 ### P3. The second retrospective call has a costly authority boundary
 
@@ -106,7 +106,7 @@ The earlier leanness assessments mostly optimized within an agreed feature set; 
 
 ### P8. Evaluation mechanics have become a large parallel model of the product
 
-**Current behavior:** intermediate intake stages are replayed; provider request digests, trace correlations, checkpoints, and result projections are reconstructed and audited. Closed performance experiments retain executable support.
+**Current main behavior:** simulation audits reconstruct relationships from API journeys, traces, checkpoints, and result projections; closed experiments retain executable support. Phase 10 added much larger intermediate intake replay and exact extraction-digest machinery on its separate branch; those additions are historical evidence, not the implementation baseline.
 
 **Underlying requirement:** show that particular source-integrity and behavior contracts held, evaluate quality, and investigate failures.
 
@@ -150,11 +150,11 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** two serial passes, one compact structured call, an unstructured note followed by extraction.
 
-**Choice and why:** provisionally one call, frozen only after R0 admission. The completed transcript, current plan, and previous handoff supply both analysis and next-step reasoning. Test the smallest consumer-justified draft on 6–10 frozen completed sessions before designing production persistence around it. Validate each section separately in ordinary code and commit together. There is no evidence here that another generated intermediary is an independent clinical check.
+**Choice and why:** provisionally one call, frozen only after R0b admission on the corrected R1 model boundary. R0a prepares the minimal schema and 6–10 frozen cases while R1 can proceed independently. Completed transcript, current plan, previous handoff, and selected patient sources supply both analysis and next-step reasoning; older review notes are initially excluded. Validate sections separately and commit together. Another generated intermediary is not an established independent clinical check.
 
 **Trade-offs:** larger single output; one invalid section invalidates the whole result; the model may mix interpretation with recommendation. Tight schemas, source labels, and targeted trials are required. Combining calls is not guaranteed to halve elapsed time.
 
-**Revisit when:** any R0 case fails its hard contract or human review identifies material omissions/plan drift within the one-correction budget. Refine the compact schema/prompt first; if a measured two-pass design addresses persistent failures, revise this decision before the cutover. Freeze matched inputs and record failures rather than averaging them away. No production restructuring proceeds on pending admission, and no generic workflow framework follows from a second call.
+**Revisit when:** any R0b case fails its hard contract or human review identifies material omissions/plan drift within the one-correction budget. Refine the compact schema/prompt first; if a measured two-pass design addresses persistent failures, revise this decision before cutover. Freeze matched inputs and record failures rather than averaging them away. R2 waits for admission; R1 correctness fixes do not. A second call does not justify a workflow framework.
 
 ### D3. One model is the baseline; a second is optional
 
@@ -172,7 +172,7 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Choice and why:** explicit finish preserves the conversational product and removes structured inference from the live critical path. A short orientation checklist invites concern, impact/course, coping, goals, and safety disclosure without claiming these topics are satisfactorily assessed.
 
-**Trade-offs:** intake can be sparse; the first plan must be provisional and openly identify unknowns. The user loses automatic readiness judgments. Direct self-report controls supplement, rather than classify, free text.
+**Trade-offs:** intake can be sparse; the first plan must be provisional and openly identify unknowns. The user loses automatic readiness judgments. Whole-source retention alone does not prove that a denial will be selected or correctly used; retain live selection/next-context checks. Typed questionnaires are a deferred product option, not a replacement requirement inherited from Category C.
 
 **Revisit when:** a real product requirement establishes mandatory assessment items, validated wording, or a supervised protocol. Then use explicit questionnaire answers; do not resurrect confidence-based extraction as proof of assessment.
 
@@ -192,9 +192,9 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** raw replay, model-authored facts, source-reference selection, SQLite full-text search, embeddings/vector storage.
 
-**Choice and why:** start with active handoff anchors, explicit user recall, then a bounded recent memory-reference pool with deterministic purpose/recency ordering. At roughly five selections per review, 100 sessions supply only about 500 candidate references. Test this baseline before adding term extraction, text matching, or ranking infrastructure. The target does not store extracted biographical facts or a continuously rewritten history summary.
+**Choice and why:** R2 starts with active handoff anchors, preceding unanswered patient input, then recent distinct memory references. Remove model-authored purpose labels and their priority rules. Order candidates by selecting-session chronology, source sequence, and a stable ID tie-breaker. R6 adds explicit recall with its complete user flow. At five selections per review, 100 sessions supply about 500 references; measure before adding term extraction or ranking infrastructure. No extracted biography or rewritten history summary is stored.
 
-**Trade-offs:** recency cannot automatically find every old relevant event, and a bounded handoff can forget an old concern. Explicit source recall is the immediate remedy. Measure unanchored recall misses separately from mandatory-source correctness; do not imply that preserving a source guarantees its prompt inclusion.
+**Trade-offs:** recency cannot automatically find every old relevant event, and a bounded handoff can forget an old concern. R2 offers basic history/source inspection; explicit inclusion arrives in R6. Measure unanchored misses separately from mandatory-source correctness; preserving a source does not guarantee its prompt inclusion.
 
 **Revisit when:** R6's fixed 100-session recall set demonstrates a material gap despite anchors and explicit recall. A separate R6b may add bounded parameterized lexical matching and compare the same cases. Consider SQLite FTS5 only if that approach remains inadequate; embeddings need a further demonstrated semantic gap. Neither is a default migration deliverable. [SQLite FTS5 documentation](https://www.sqlite.org/fts5.html)
 
@@ -214,13 +214,13 @@ These are qualitative assessments, not measured scores. Correctness and testabil
 
 **Options:** existing schema transformation/parser; the SDK public `chat.completions.parse`; a new structured-output wrapper; permissive JSON repair.
 
-**Choice and why:** first admit the actual intended llama.cpp and MTPLX builds/configurations against the compact review schema in R0. If both pass, target `json_schema` as the sole production review mode. Keep another mode only for a named required endpoint whose measured incompatibility justifies it; do not preserve three paths for hypothetical portability. This intentionally narrows the current configurable endpoint promise when the canonical docs change at cutover.
+**Choice and why:** R0a designates one required local review model/server configuration before final tests. R0b admits it against the compact schema on R1's corrected boundary, targeting `json_schema` as the sole production review mode. llama.cpp, MTPLX, or other additional runtimes gain support only after their own admission and do not block canonical cutover. An optional incompatibility does not automatically justify another mode. Any exception needs a named required endpoint and measured need. Update the broader current endpoint promise when canonical docs change at cutover.
 
 In R5, test public SDK parsing with a Pydantic response model against the then-locked SDK. The original inspection found this path in SDK **2.45.0**, with one HTTP post; do not assume that inspection admits a later version. Keep Jung's semantic validator, one explicit correction loop, and disabled SDK retries. The deletion target is Jung's strict-schema conversion and second validation walk, plus unneeded structured modes.
 
 **Trade-offs:** SDK parse errors, refusal, length endings, and raw-response capture must be covered against the locked SDK and intended server. Correction can regenerate from original input plus safe error locations; it does not require echoing an invalid sensitive response. Use public raw-response facilities for opted-in capture, never private SDK schema helpers. Model schema constraints still need compatibility tests.
 
-**Revisit when:** the locked public SDK cannot support the admitted endpoint or expose required failure evidence. Retain a narrowly justified direct-create implementation of the admitted schema path in that case, not an extra mode, framework, or hidden repair service. R0 admits server/schema behavior; R5 separately admits the parsing implementation. Neither gate delegates semantic validation.
+**Revisit when:** the locked public SDK cannot support the admitted endpoint or expose required failure evidence. Retain a narrowly justified direct-create implementation of the admitted schema path in that case, not an extra mode, framework, or hidden repair service. R0b admits server/schema behavior on R1; R5 separately admits the parsing implementation and reruns affected evidence. Neither gate delegates semantic validation.
 
 ### D9. Whole-session review, bounded session size
 
@@ -228,7 +228,7 @@ In R5, test public SDK parsing with a Pydantic response model against the then-l
 
 **Choice and why:** define one conservative maximum serialized session-source size, bound assistant output and all non-session review sections, and admit only review endpoints that fit the complete envelope. Before accepting a turn, add the candidate patient source and maximum assistant source to the current source-byte count. No per-session capacity JSON, frozen runtime, or reconstructed prospective review request is needed. Warn at 80%; reject overflow while preserving the draft and offering explicit closure. History stays permanently accessible.
 
-The product envelope is independent of the configured retry model. A replacement endpoint must fit the same envelope before it can review accepted sessions. R0 fixes the concrete limits using representative multilingual/long-message fixtures; runtime capacity errors remain explicit failures rather than proof that byte counting is exact tokenization.
+One canonical `serialize_review_session_source` function owns the source block used verbatim in review prompts and measured as UTF-8 bytes for acceptance. Do not maintain a second labels/metadata estimator. The product envelope is independent of the retry model; replacements must fit it. R0b freezes limits using representative fixtures on the designated runtime. Runtime capacity errors remain explicit failures; byte counting is not exact tokenization.
 
 **Trade-offs:** very long sessions or unusually small review contexts require an earlier break. Automatic chunk-and-merge has no demonstrated need yet, but may be better than disruptive boundaries if realistic use frequently reaches them.
 
@@ -242,7 +242,7 @@ The product envelope is independent of the configured retry model. A replacement
 
 ### D11. Preferences are metadata, not a SETUP stage
 
-**Choice and why:** initialize the profile and intake together with visible English/supportive defaults. Display name is optional. Preferences can be edited before first input, then are frozen for that session; later changes apply to future sessions. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
+**Choice and why:** initialize profile and intake together with visible English/supportive defaults; display name is optional. Intake preferences remain editable while idle until Finish Intake atomically freezes them for initial review. Therapy snapshots preferences at session creation; later edits apply to future sessions. Review retries retain the closed session's preferences. The workflow is `INTAKE → REVIEW → READY ↔ THERAPY`, with completed therapy returning through `REVIEW`.
 
 **Trade-off:** the default language/method is a product default, not an explicit patient choice or clinical recommendation. The console must make defaults and pending changes visible. Reinstate a setup gate only for a demonstrated requirement that cannot be met through editable metadata.
 

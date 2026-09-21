@@ -67,10 +67,10 @@ There are two separate engineering concerns: behavior toward a person and integr
 ### Product behavior
 
 - A short common safety/boundary instruction applies across intake, conversation styles, and review. Style instructions may influence method but never replace that common policy.
-- Keep the application's research-tool status and help action visible. Explicit user-requested urgent help or affirmative urgent self-report displays a maintained static help response immediately, independent of LLM availability. It does not close the session, claim outside help was contacted, or certify that risk was assessed.
+- Keep the research-tool status and explicit help action visible. Invoking that action displays maintained static help independently of LLM availability. It does not close the session, contact outside help, or certify assessment. Typed self-report controls are deferred; free-text urgency remains a conversation input, not an automatic deterministic trigger.
 - Patient text about urgent risk remains a current conversation input. Prompt the conversation model to address it rather than continue routine questioning. Retrospective review is not the sole route to handling urgent content.
 - Do not introduce an automatic crisis classifier, medical advice engine, emergency-service integration, or risk score without a defined product requirement and validation plan. The current architecture cannot guarantee detection of urgency in free text; a static help path does not change that limitation.
-- A historical denial is dated patient wording, not a permanent all-clear. `decline`, `unsure`, and absent response are not `no`.
+- A historical denial is dated wording, not a permanent all-clear. Uncertainty, declining to answer, or missing information cannot be turned into a denial; these are free-text semantics, not typed intake slots.
 - Review observations are generated interpretation. A source citation permits inspection; it does not prove diagnosis, causality, treatment benefit, or semantic accuracy.
 
 This proposal makes no claim that a single model, two models, or a particular therapy style is clinically validated. Clinical effectiveness and crisis response quality need a separate appropriately designed evaluation, not more runtime agents.
@@ -94,7 +94,7 @@ Synthetic runs must allocate isolated data directories before composing the appl
 | Surface | Failure detected that cheaper layers cannot | Gate or aid | Expected cost |
 |---|---|---|---|
 | Deterministic unit/integration | Broken state transitions, SQL invariants, cancellation, duplicate acceptance, bounds, provenance, selection, error mapping | Pre-merge product gate: `make check` | No model calls; typically seconds/minutes |
-| R0 compact-review admission | Whether one bounded review can replace the two-pass result on matched completed sessions | Architecture gate before production restructuring; hard checks plus human comparison | 6–10 frozen cases, at most one correction each; baseline calls only if applicable matched output is missing |
+| R0b compact-review admission | Whether one bounded review can replace the two-pass result on matched completed sessions using R1 transport semantics | R2 gate for one runtime designated in R0a; additional advertised runtimes admitted separately | 6–10 frozen cases, one correction max; baseline calls only if applicable matched output is missing |
 | Runtime compatibility admission | Actual server schema/stream/finish/reasoning/timeout behavior and wire support | Gate for a newly admitted endpoint profile | Roughly 3–5 small synthetic requests, plus a bounded cancellation probe |
 | Targeted model contracts | Whether the configured model can produce valid source selections and resist specific instruction attacks | Gate for that model/prompt configuration on the named cases | About 6–10 cases; one correction max per structured case |
 | Qualitative replay | Misattunement, harmful advice, unsupported certainty, stale-history attribution, inappropriate method use | Human-review aid; explicit reviewer sign-off for changed behavior | A selected 4–8 cases normally; expand only for a reason |
@@ -107,16 +107,16 @@ Do not claim a narrow sentinel test proves general injection resistance. It catc
 
 Keep one exhaustive owner for each invariant, plus a few cross-boundary examples:
 
-- SQL integration: message uniqueness/order, one open session, one unfinished review, source roles, plan lineage, all-or-nothing commit, failed attempt fencing.
-- Application integration: identical retry, input metadata conflict, disconnect-before/after commit, interrupted review recovery, scheduling failure, new-session blocking.
+- SQL integration: uniqueness/order, one open session/review, source roles, plan lineage and derived review-to-plan lookup, atomic commit, attempt fencing, purpose-free references.
+- Application integration: identical retry, disconnect-before/after commit, interrupted review recovery, scheduling failure, new-session blocking; R6 adds recall-metadata conflicts and validation.
 - Adapter unit/HTTP mock: exact physical attempts, total deadlines including correction, length/refusal/EOF/blank handling, stream close, credentials, actual serialized schema/options.
-- Context unit/store integration: mandatory source reservation, complete exchanges, no current-message duplication, temporal labels, fixed-envelope multilingual/metadata/many-short-turn boundaries, same-ID byte counting, and capacity rejection before acceptance. At 100 sessions, old anchored/explicitly recalled sources must survive irrelevant recent material; unanchored recall misses are measured separately.
-- API/console: default-initialized intake, preference edits before first input and freezing afterward, one happy path and a small interrupted-stream/retry path; required DTO/error changes, source inspection, capacity warning and draft preservation.
+- Context unit/store integration: identical canonical source serialization for accounting/review, multilingual/escaping/many-short-turn boundaries, retries count once, mandatory sources, contiguous exchanges, temporal labels, no older review notes, and chronology-only candidate ordering. R6 adds recall metadata and revalidates the envelope; 100-session fixtures separate required anchor/recall inclusion from unanchored misses.
+- API/console: default intake, idle preference edits until closure, atomic closure/edit races and retry stability, therapy snapshots at creation, interrupted stream/retry, basic inspection, capacity warning/draft preservation; R6 adds complete browsing/recall behavior.
 - Eval harness: fixture isolation, patient information boundary, nonzero failure outcome, cancellation/capture failure, and no evidence-success on missing files.
 
 Prefer behavioral assertions over snapshots of whole prompts, private helper names, or every diagnostic log field. Preserve import-boundary tests that enforce real ownership; remove filename freezes when modules change.
 
-### Preserve or retire the existing hard contracts explicitly
+### Main contracts and Phase-10 lessons have distinct owners
 
 | Existing assertion family | Target owner / decision |
 |---|---|
@@ -125,11 +125,11 @@ Prefer behavioral assertions over snapshots of whole prompts, private helper nam
 | Citation existence/role/chronology | Primarily deterministic validator/store tests; one live case verifies the model can actually satisfy them |
 | Safety-relevant negation selection | Retain a live review case that selects the whole source and carries it into the next prompt; no invalid-output-as-pass shortcut |
 | Style canary not copied into generated artifacts | Retain one live review case, with method instructions separated from sources |
-| Category C clear dual denial, no inferred third safety dimension | Replace extraction-field assertions with deterministic explicit self-report dimension retention and live free-text denial/source-selection behavior |
-| Exact raw extraction → materialized patch → merged record digests | Retire when that production pipeline disappears; preserve historical reports as historical, not target admission evidence |
+| Phase-10 Category C dual denial / unasked safety dimension (not an active main test) | Carry the lesson into exact free-text source retention, live denial selection/next-context, and qualitative no-broadening checks; no typed self-report analogue required |
+| Phase-10 exact extraction → patch → merged-record digests (absent from main) | Preserve historical evidence; do not import the engine or its intermediate contract onto the refactor branch |
 | Exact frozen update-prompt projection | Retire with the second call; replace with full-session coverage, visible-source validation, and atomic review commit |
 
-The Category C change is an intentional withdrawal of an **intermediate extraction contract**, not a claim that raw-message retention alone proves future semantic memory. The live replacement must show that a relevant denial is actually selected and supplied to the next conversation, and qualitative review must check that it is not broadened to an unasked dimension. The migration changes owning safety/eval documentation in the same commit.
+Main already has a live post-session negation-selection contract; Phase 10 adds a distinct intermediate intake extraction contract on its own branch. The target preserves the useful denial lesson without adopting extraction assertions or structured safety controls. A live case must show selection of the complete source and inclusion in the next conversation; qualitative review checks no broadening to an unasked dimension. Raw storage alone cannot prove this behavior. Update owning safety/eval docs when target contracts land.
 
 ### Evidence implementation
 
@@ -137,9 +137,9 @@ For a hard live test, capture at the boundary the test actually asserts: exact s
 
 This capture belongs to the eval harness. Do not route it through a general trace-replay engine. Do not independently reimplement the production merge/packing algorithm and call agreement proof. If a test promises exact intermediate evidence, assert its completeness directly; failure to capture is nonzero even if the model response looked good. Preserve a primary product failure when cleanup/evidence writing also fails, and report both.
 
-During R1, existing Category C remains valid and unchanged unless a narrowly necessary boundary fix requires an adjustment. Make only dependency cuts needed to prevent new trace-v5 consumers; do not replace its correlation reader or broadly refactor simulation audits ahead of deletion. R2 retires extraction-specific assertions and their owning forensic machinery with extraction itself, while landing source-retention, explicit-dimension, live negation-selection, and next-context replacements in the same integration unit. R3 removes residual obsolete imports/helpers; it is not permission to postpone surviving correctness tests.
+R1 preserves main's active hard contracts and fixes model-boundary correctness independently of R0a design work. It does not port Phase-10 Category-C/forensic code. R0b then captures final admission on R1's semantics. R2 retires only old owners/assertions actually present in its main-based branch, adding whole-source retention and live negation-selection/next-context contracts before integration. Owning tests accompany each stack layer; R3 removes residue rather than postponing correctness.
 
-Preserve frozen Phase-10 evidence and its revision/run references as historical evidence. That work resolved actual attempt/provenance/completeness problems under the old contract. Deleting the product mechanism changes future proof obligations; it does not invalidate old findings or justify copying their success claims into R0 admission.
+Preserve Phase-10 evidence, revisions, and explicit limitations, including incomplete journey/remediated-head live validation. Its attempt/provenance/completeness findings remain useful without merging the implementation. They do not establish R0b admission. Neither closing nor merging its PR is a refactor prerequisite.
 
 ### Reports and simulations
 
