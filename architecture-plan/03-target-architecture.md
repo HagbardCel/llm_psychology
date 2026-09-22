@@ -46,12 +46,12 @@ src/jung/
   composition.py       # acquire data-dir process lock, construct and close resources
   config.py            # sole configuration loader
   local.py             # foreground launcher
-  styles/              # descriptions, conversation guidance, review guidance
+  methods/             # descriptions, conversation guidance, review guidance
 ```
 
 Do not reorganize unaffected API/client files simply to match this picture. A separate processor class is unnecessary if a prompt function plus a narrow call suffices. Keep a small model protocol for fakes; no factory registry, base-agent class, or dynamic task dispatch.
 
-The packaged catalog has one `MethodDefinition` per existing ID, with `id`, `name`, `description`, `conversation_instructions`, and `review_instructions`. The description serves the method chooser; conversation guidance serves therapy only; review guidance serves both initial and later review. These two instruction fields have distinct consumers: live replies versus retrospective interpretation/planning. Keep common safety and task policy outside method assets. Require nonempty `description.txt`, `conversation_instructions.txt`, and `review_instructions.txt`; missing assets fail explicitly. Retire the old `StyleDefinition` assessment/therapist/post-session fields and `assessment_prompt.txt`, `therapist_prompt.txt`, and `reflection_prompt.txt` with their final consumers, rather than preserving obsolete files to satisfy the old loader. R0 admits the exact review guidance before R2 promotes it into production.
+The target `jung.methods` package has one `MethodDefinition` per existing catalog ID, with `id`, `name`, `description`, `conversation_instructions`, and `review_instructions`. The description serves the method chooser; conversation guidance serves therapy only; review guidance serves both initial and later review. These two instruction fields have distinct consumers: live replies versus retrospective interpretation/planning. Keep common safety and task policy outside method assets. Require nonempty `description.txt`, `conversation_instructions.txt`, and `review_instructions.txt`; missing assets fail explicitly. Retire the old `StyleDefinition` assessment/therapist/post-session fields and `assessment_prompt.txt`, `therapist_prompt.txt`, and `reflection_prompt.txt` with their final consumers, rather than preserving obsolete files to satisfy the old loader. R0 admits the exact review guidance for every packaged method before R2 promotes it into production: development exercises both review modes for each method; independent confirmation covers every method and both modes collectively. This does not admit the separate conversation guidance. R2 introduces `methods/` and retires legacy `styles/` with its final consumers; no compatibility alias remains.
 
 ## Workflow state and concurrency
 
