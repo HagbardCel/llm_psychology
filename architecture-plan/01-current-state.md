@@ -15,23 +15,23 @@ for area in src/jung tests evals; do
 done
 ```
 
-Result on `bd9051d`: `src/jung` 75 / 14,432; `tests` 118 / 29,695; `evals` 15 / 6,922 (comments and blank lines included). Absent Phase-10-only paths on this baseline: `evals/simulation/intake_forensics.py`, `evals/intake_risk_denial_evidence.py`, `evals/test_intake_clear_risk_denial.py`.
+Pre-fix B0 measurement at `a468070`: `src/jung` 75 / 14,432; `tests` 118 / 29,695; `evals` 15 / 6,922 (comments and blank lines included). The focused warning fix added four net lines in `tests/unit/test_local.py` only. Pinned post-fix implementation baseline `bd9051d`: `src/jung` 75 / 14,432; `tests` 118 / **29,699**; `evals` 15 / 6,922. Absent Phase-10-only paths on this baseline: `evals/simulation/intake_forensics.py`, `evals/intake_risk_denial_evidence.py`, `evals/test_intake_clear_risk_denial.py`. Worktree provenance for the inventory correction is in [06-migration-plan.md](06-migration-plan.md).
 
 The original inspection covered canonical docs, runtime flows, persistence, model/context boundaries, diagnostics, clients, and test/eval owners. This refresh compared main against that inspection, checked the complete production diff, and inspected main's changed prompt, diagnostics/eval owners, schema version, and tracked source inventory. Unchanged runtime-flow findings carry forward. This is architectural inspection, not a line-by-line security review. Relative source links name paths present on main; use the pinned SHA when the editing branch differs. The prior Phase-10 inspection remains in [the original planning commit](https://github.com/HagbardCel/llm_psychology/blob/632cdcbf36194f9090f0a1a061c0c5c0935cfa17/architecture-plan/01-current-state.md).
 
-A count of tracked Python files from this main revision, including comments and blank lines, found:
+A count of tracked Python files at the pinned implementation baseline `bd9051d`, including comments and blank lines, found (pre-fix `a468070` used 29,695 test lines):
 
 | Area | Files | Lines |
 |---|---:|---:|
 | Production `src/jung` | 75 | 14,432 |
-| `tests` including manual smoke | 118 | 29,695 |
+| `tests` including manual smoke | 118 | 29,699 |
 | `evals` | 15 | 6,922 |
 
 Counts identify concentrations, not defects. A correctness test is not unnecessary merely because it is long.
 
 ## Phase-10 investigation: historical, not the implementation base
 
-At this inspection, `fix/phase-10-intake-completion` at `301d8bb` is 12 commits ahead of main, with no commits behind. [PR #76](https://github.com/HagbardCel/llm_psychology/pull/76) was open and unmerged when checked. Its description labels the outcome “Defect verified / journey incomplete,” records the historical canary's `intake_turn_limit_exceeded`, and states that remediated-head focused live validation was not run. Do not describe it as a proven final intake architecture or a completed successful journey.
+At the 2026-09-20 inspection, `fix/phase-10-intake-completion` at `301d8bb` is 12 commits ahead of main, with no commits behind. [PR #76](https://github.com/HagbardCel/llm_psychology/pull/76) was open and unmerged when checked. Its description labels the outcome “Defect verified / journey incomplete,” records the historical canary's `intake_turn_limit_exceeded`, and states that remediated-head focused live validation was not run. Do not describe it as a proven final intake architecture or a completed successful journey.
 
 The branch adds a narrow denial-prompt improvement, `intake.turn.evaluated` diagnostics, a diagnostic sink protocol, and extensive extraction/evidence reconstruction. Its investigation exposed clear-denial failures, ambiguous attempt correlation, observed-versus-committed state, and primary/cleanup failure handling. Preserve those lessons and the recorded limits, but do not port the forensic engine merely to delete it. Main has neither `evals/simulation/intake_forensics.py` nor `evals/intake_risk_denial_evidence.py` / `evals/test_intake_clear_risk_denial.py`. Its existing diagnostic recorder and simulation audit still require R3/R4 simplification.
 

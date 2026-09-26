@@ -302,7 +302,7 @@ At `ce62dfda76f93dbf3be3b513bc8e2c83d49e9aa0`, [GitHub Release Gate](https://git
 
 ### B0 main baseline — 2026-09-26
 
-Measured pristine `main` at `a468070eef308e472970ef78cccf12fe04a5b1d2` (merge of PR #77; `73492a5b..a468070` is architecture-plan documents only). Confirmed schema version **7**, six tables, six `LLMTask` values, active `DiagnosticRecorder`, and absence of `evals/simulation/intake_forensics.py`, `evals/intake_risk_denial_evidence.py`, and `evals/test_intake_clear_risk_denial.py`. Inventory used the command recorded in [01-current-state.md](01-current-state.md); counts unchanged from the published table. Project contract `requires-python >=3.11`; locked `openai==2.45.0`; B0 validation interpreter `Python 3.12.13`.
+Measured pristine `main` at `a468070eef308e472970ef78cccf12fe04a5b1d2` (merge of PR #77; `73492a5b..a468070` is architecture-plan documents only). Confirmed schema version **7**, six tables, six `LLMTask` values, active `DiagnosticRecorder`, and absence of `evals/simulation/intake_forensics.py`, `evals/intake_risk_denial_evidence.py`, and `evals/test_intake_clear_risk_denial.py`. Inventory used the command recorded in [01-current-state.md](01-current-state.md): pre-fix `a468070` matched `src/jung` 75 / 14,432; `tests` 118 / 29,695; `evals` 15 / 6,922. The warning fix added four net test lines only; pinned post-fix `bd9051d` is `tests` 118 / **29,699**. Project contract `requires-python >=3.11`; locked `openai==2.45.0`; B0 validation interpreter `Python 3.12.13`.
 
 Pre-fix `make check` on `a468070`: format/lint/documentation checks, **960 unit/integration tests**, and **3 console E2E tests**, with one warning:
 
@@ -313,4 +313,16 @@ RuntimeWarning: coroutine 'run_local' was never awaited
 
 (report surfaced during `tests/unit/test_settings.py::test_header_non_string_rejected` after the patched `cli()` test left the coroutine unclosed).
 
-Merged focused correction to `tests/unit/test_local.py` on `main`; implementation pin **`bd9051d6305dd834eda3ccb8930e6edb85f0debd`**. Post-fix `make check`: same counts, **no warnings**. This documentation commit records B0 on top of that pin. Live model evaluation was **not run**. `make check`, `uvx --from 'md-link-checker==1.10' md-link-checker --no-urls architecture-plan/*.md`, and `git diff --check` passed on the docs branch.
+Merged focused correction to `tests/unit/test_local.py` on `main`; implementation pin **`bd9051d6305dd834eda3ccb8930e6edb85f0debd`**. Post-fix `make check`: **960 unit/integration tests and 3 console E2E tests**, with **no warnings**. This documentation commit records B0 on top of that pin. Live model evaluation was **not run**. `make check`, `uvx --from 'md-link-checker==1.10' md-link-checker --no-urls architecture-plan/*.md`, and `git diff --check` passed on the docs branch.
+
+### B0 baseline remediation — 2026-09-26
+
+Corrected the post-fix test line inventory: the 29,695 count corresponded to pre-fix `a468070` but had been labeled as `bd9051d`; the pinned implementation baseline is **29,699** test lines (+4 from `tests/unit/test_local.py` only). Clarified the historical Phase-10 paragraph date in [01-current-state.md](01-current-state.md).
+
+Worktree provenance:
+
+- The original B0 documentation did not retain the requested `git status --short` outputs; they are not reconstructed here.
+- Before remediation edits, the branch based exactly on clean `main` at `5c83d2a` had an empty `git status --short`.
+- Immediately before commit, `git status --short` contained only `architecture-plan/01-current-state.md` and `architecture-plan/06-migration-plan.md`.
+
+Re-ran the inventory command on this tree before commit: `src/jung` files=75 lines=14432; `tests` files=118 lines=29699; `evals` files=15 lines=6922. `git diff --check`, `make check`, and `uvx --from 'md-link-checker==1.10' md-link-checker --no-urls architecture-plan/*.md` passed on the prepared documentation. Live model evaluation was **not run**. The implementation inventory pin remains `bd9051d`; R0a/R1 branch from post-remediation `main`, whose intervening changes since that pin are documentation only.
