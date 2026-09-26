@@ -158,8 +158,12 @@ async def test_run_local_exits_server_context_on_console_failure() -> None:
 
 
 def test_cli_maps_keyboard_interrupt_to_exit_130() -> None:
+    def interrupt_without_running(coro):
+        coro.close()
+        raise KeyboardInterrupt
+
     with (
         patch("jung.local.load_settings", return_value=MagicMock(spec=JungSettings)),
-        patch("jung.local.asyncio.run", side_effect=KeyboardInterrupt),
+        patch("jung.local.asyncio.run", side_effect=interrupt_without_running),
     ):
         assert cli() == 130
