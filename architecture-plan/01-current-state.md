@@ -2,7 +2,20 @@
 
 ## Scope and method
 
-Implementation baseline: local `main` at **`73492a5b8052cb5fc2ea0a3d02ae0fd6d910f452`**, the merge of PR #75 / Phase 9, inspected through Git objects on **2026-09-20**. The editing checkout remains the Phase-10 branch; this document describes main, not that checkout. Refresh the SHA/inventory in B0 if main advances. No patient database, `.env` secrets, raw patient trace, or simulation transcript was needed.
+Implementation baseline: local `main` at **`bd9051d6305dd834eda3ccb8930e6edb85f0debd`**, measured on **2026-09-26** in B0. Revision history since the Phase-9 pin `73492a5b8052cb5fc2ea0a3d02ae0fd6d910f452`: `73492a5b..a468070` added only the seven `architecture-plan/*.md` files; `a468070..bd9051d` applied only the focused `run_local` test-harness warning correction in `tests/unit/test_local.py`. Production and eval Python under `src/jung` and `evals` remain identical to `73492a5b`. No patient database, `.env` secrets, raw patient trace, or simulation transcript was needed.
+
+B0 measured pristine `main` at `a468070eef308e472970ef78cccf12fe04a5b1d2` before that correction. Project contract: `requires-python >=3.11` ([pyproject.toml](../pyproject.toml)); locked OpenAI SDK `2.45.0` ([uv.lock](../uv.lock)). B0 validation interpreter: `Python 3.12.13` (`uv run python -V` during the gate). Inventory command:
+
+```bash
+for area in src/jung tests evals; do
+  files=$(git ls-files "$area" | grep '\.py$')
+  count=$(printf '%s\n' "$files" | grep -c .)
+  lines=$(printf '%s\n' "$files" | xargs wc -l | tail -1 | awk '{print $1}')
+  printf '%s files=%s lines=%s\n' "$area" "$count" "$lines"
+done
+```
+
+Result on `bd9051d`: `src/jung` 75 / 14,432; `tests` 118 / 29,695; `evals` 15 / 6,922 (comments and blank lines included). Absent Phase-10-only paths on this baseline: `evals/simulation/intake_forensics.py`, `evals/intake_risk_denial_evidence.py`, `evals/test_intake_clear_risk_denial.py`.
 
 The original inspection covered canonical docs, runtime flows, persistence, model/context boundaries, diagnostics, clients, and test/eval owners. This refresh compared main against that inspection, checked the complete production diff, and inspected main's changed prompt, diagnostics/eval owners, schema version, and tracked source inventory. Unchanged runtime-flow findings carry forward. This is architectural inspection, not a line-by-line security review. Relative source links name paths present on main; use the pinned SHA when the editing branch differs. The prior Phase-10 inspection remains in [the original planning commit](https://github.com/HagbardCel/llm_psychology/blob/632cdcbf36194f9090f0a1a061c0c5c0935cfa17/architecture-plan/01-current-state.md).
 
@@ -20,9 +33,9 @@ Counts identify concentrations, not defects. A correctness test is not unnecessa
 
 At this inspection, `fix/phase-10-intake-completion` at `301d8bb` is 12 commits ahead of main, with no commits behind. [PR #76](https://github.com/HagbardCel/llm_psychology/pull/76) was open and unmerged when checked. Its description labels the outcome “Defect verified / journey incomplete,” records the historical canary's `intake_turn_limit_exceeded`, and states that remediated-head focused live validation was not run. Do not describe it as a proven final intake architecture or a completed successful journey.
 
-The branch adds a narrow denial-prompt improvement, `intake.turn.evaluated` diagnostics, a diagnostic sink protocol, and extensive extraction/evidence reconstruction. Its investigation exposed clear-denial failures, ambiguous attempt correlation, observed-versus-committed state, and primary/cleanup failure handling. Preserve those lessons and the recorded limits, but do not port the forensic engine merely to delete it. Main has neither `intake_forensics.py` nor the Category-C evidence writer/live test. Its existing diagnostic recorder and simulation audit still require R3/R4 simplification.
+The branch adds a narrow denial-prompt improvement, `intake.turn.evaluated` diagnostics, a diagnostic sink protocol, and extensive extraction/evidence reconstruction. Its investigation exposed clear-denial failures, ambiguous attempt correlation, observed-versus-committed state, and primary/cleanup failure handling. Preserve those lessons and the recorded limits, but do not port the forensic engine merely to delete it. Main has neither `evals/simulation/intake_forensics.py` nor `evals/intake_risk_denial_evidence.py` / `evals/test_intake_clear_risk_denial.py`. Its existing diagnostic recorder and simulation audit still require R3/R4 simplification.
 
-Implementation starts from main without requiring PR #76 to merge or close. Retain the existing Phase-10 history and private evidence. Planning documents can move independently; the narrow old-extractor prompt fix is not an automatic prerequisite. Historical evidence is not admission for the new schema. B0 must measure main's own tests/warnings rather than reuse Phase-10 counts.
+Implementation starts from main without requiring PR #76 to merge or close. Retain the existing Phase-10 history and private evidence. Planning documents can move independently; the narrow old-extractor prompt fix is not an automatic prerequisite. Historical evidence is not admission for the new schema. B0 closed with a fresh main measurement and a warning-free deterministic gate on `bd9051d`; see the B0 entry in [06-migration-plan.md](06-migration-plan.md).
 
 ## Runtime and ownership
 

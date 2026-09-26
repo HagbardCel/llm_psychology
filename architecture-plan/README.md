@@ -4,7 +4,7 @@
 
 This is a proposed replacement architecture, not a description of implemented behavior. Prepared on **2026-09-06** against **`18d18898`**, branch `fix/phase-10-intake-completion`. No production code, database, model configuration, or existing assessment document was changed by this planning exercise. Existing canonical documents remain descriptions of the running implementation until the corresponding migration lands.
 
-Revised on **2026-09-22**, including PR #77 feedback on executable stack boundaries, independent confirmation cases, coverage of every packaged review method, and limiting feature scope. The current-state analysis describes main at **`73492a5b`**; the original Phase-10 inspection and its evidence remain historical. Implementation starts from then-current main without requiring PR #76 to merge or close. One-call review remains unproven until R0b admission on the corrected R1 boundary.
+Revised on **2026-09-22**, including PR #77 feedback on executable stack boundaries, independent confirmation cases, coverage of every packaged review method, and limiting feature scope. B0 on **2026-09-26** pinned the implementation baseline at **`bd9051d`**; the [current-state analysis](01-current-state.md) records that measurement. The original Phase-10 inspection and its evidence remain historical. Implementation starts from then-current main without requiring PR #76 to merge or close. One-call review remains unproven until R0b admission on the corrected R1 boundary.
 
 ## Read the plan
 

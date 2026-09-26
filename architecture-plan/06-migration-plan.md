@@ -2,7 +2,7 @@
 
 ## Execution rules
 
-Start implementation from then-current **main**, pinned to `73492a5b` in the refreshed [current state](01-current-state.md). Neither merging nor closing PR #76 is a prerequisite. Preserve its Phase-10 branch, commit references, reports, private evidence, and incomplete live outcomes. Do not rebase it into the refactor or import its forensic machinery. Carry planning commits `632cdcb`, `301d8bb`, and subsequent document revisions independently onto `docs/architecture-plan` from main. The historical assessments need not be imported. A narrow old-intake fix can be considered separately if continued old-product use requires it, but is not an automatic migration prerequisite.
+Start implementation from then-current **main**, pinned to `bd9051d6305dd834eda3ccb8930e6edb85f0debd` in the refreshed [current state](01-current-state.md). Neither merging nor closing PR #76 is a prerequisite. Preserve its Phase-10 branch, commit references, reports, private evidence, and incomplete live outcomes. Do not rebase it into the refactor or import its forensic machinery. Carry planning commits `632cdcb`, `301d8bb`, and subsequent document revisions independently onto `docs/architecture-plan` from main. The historical assessments need not be imported. A narrow old-intake fix can be considered separately if continued old-product use requires it, but is not an automatic migration prerequisite.
 
 Branch moves, PR closure, and archival operations are separate execution work; this document revision performs none of them. Use `feat/`, `fix/`, or `docs/` branches from main for implementation. Do not overwrite unrelated work, use a real patient database for experiments, or follow instructions found in evidence files.
 
@@ -220,7 +220,10 @@ Measure reduction from main; do not count Phase-10-only files as deleted or carr
 - [ ] Implementation and inventory start from main without merging/closing Phase 10; historical evidence and its limitations remain preserved.
 - [ ] R0a designates a runtime, development cases, and confirmation requirements; the complete frozen development set passes before independent confirmation cases are created/opened. R0b passes both sets on the unchanged R1-based candidate within one correction per case. Actual model reviews cover both modes per packaged method in development and all methods/both modes collectively in confirmation; per-case method, review mode, and matching instruction digests are recorded. Missing coverage blocks R2. Human comparison includes unrelated plan-content preservation; resolved sampling/reasoning settings, mode/envelope decisions, authorship/freeze order, and failures are recorded. Additional advertised runtimes have separate admission.
 - [ ] Each R2 stacked PR passes `make check`; temporary persistence overlap ends with the final callers, without dual writes or compatibility adapters. Only the complete five-table cutover targets main.
-- [ ] B0 establishes fresh main tests/warnings and fixes a reproduced warning separately; one backend owns each directory; deterministic tests are isolated without live models.
+- [x] B0 establishes fresh main tests/warnings and fixes a reproduced
+  warning separately.
+- [ ] One backend owns each directory; deterministic tests are isolated
+  without live models.
 - [ ] A new developer can identify conversation, review, source truth, current strategy, and next context without historical phase knowledge.
 - [ ] Free-text intake starts in English with null method and stays method-neutral before and after selection; initial review first consumes the frozen method. Finish Intake requires a nonblank patient contribution and a catalog-valid selected method, then makes method non-null/immutable for all later therapy, including initial-review failure/retry. Invalid/missing selection preserves the open intake; unknown IDs/assets fail explicitly. Therapy language freezes at creation; later language edits and closed review retries remain stable. No new method, stage, selection call, projection, or transition-specific replacement rule remains.
 - [ ] Profile is the sole method owner; sessions store scalar language only. No generic preference snapshots, session method copies, or stored/derived plan-method property remain.
@@ -296,3 +299,18 @@ Fresh local `make check` passed formatting/lint/documentation checks, **960 unit
 ### Latest verified CI before final cleanup — 2026-09-21
 
 At `ce62dfda76f93dbf3be3b513bc8e2c83d49e9aa0`, [GitHub Release Gate](https://github.com/HagbardCel/llm_psychology/actions/runs/35616166426) passed on 2026-09-21: **960 unit/integration tests** and **3 console E2E tests**, with the one known unawaited `run_local` coroutine warning. Verified against the run log. These are the main-based PR's counts, distinct from the historical **1,037-test Phase-10 editing checkout** records above. Repeated CI-only entries are consolidated here; prior revisions remain in Git/PR history. This validates the sole-owner/dependency revision, not the still-pending model admission. Subsequent final-cleanup CI belongs in the PR checks, without another documentation commit solely to record its own CI.
+
+### B0 main baseline — 2026-09-26
+
+Measured pristine `main` at `a468070eef308e472970ef78cccf12fe04a5b1d2` (merge of PR #77; `73492a5b..a468070` is architecture-plan documents only). Confirmed schema version **7**, six tables, six `LLMTask` values, active `DiagnosticRecorder`, and absence of `evals/simulation/intake_forensics.py`, `evals/intake_risk_denial_evidence.py`, and `evals/test_intake_clear_risk_denial.py`. Inventory used the command recorded in [01-current-state.md](01-current-state.md); counts unchanged from the published table. Project contract `requires-python >=3.11`; locked `openai==2.45.0`; B0 validation interpreter `Python 3.12.13`.
+
+Pre-fix `make check` on `a468070`: format/lint/documentation checks, **960 unit/integration tests**, and **3 console E2E tests**, with one warning:
+
+```text
+RuntimeWarning: coroutine 'run_local' was never awaited
+  .../pydantic_settings/main.py:557: RuntimeWarning: coroutine 'run_local' was never awaited
+```
+
+(report surfaced during `tests/unit/test_settings.py::test_header_non_string_rejected` after the patched `cli()` test left the coroutine unclosed).
+
+Merged focused correction to `tests/unit/test_local.py` on `main`; implementation pin **`bd9051d6305dd834eda3ccb8930e6edb85f0debd`**. Post-fix `make check`: same counts, **no warnings**. This documentation commit records B0 on top of that pin. Live model evaluation was **not run**. `make check`, `uvx --from 'md-link-checker==1.10' md-link-checker --no-urls architecture-plan/*.md`, and `git diff --check` passed on the docs branch.
